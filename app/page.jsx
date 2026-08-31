@@ -40,6 +40,7 @@ export default function Home() {
   const [tapped, setTapped] = useState(null);
   const [transferOut, setTransferOut] = useState(null);
   const [swapping, setSwapping] = useState(null);
+  const [swapNote, setSwapNote] = useState(null);
   const [showDrafts, setShowDrafts] = useState(false);
 
   const refreshDrafts = useCallback(() => {
@@ -170,20 +171,27 @@ export default function Home() {
     return created.id;
   }, [draftId, gw, refreshDrafts]);
 
-  const applyTransfer = useCallback((incoming) => {
-    if (!transferOut) return;
+  /* The whole set commits together. A joint move only balances across all of it, so applying one
+     pair at a time could leave the squad transiently over budget and reject the rest. */
+  const applyTransfer = useCallback((pairs) => {
+    if (!pairs?.length) return;
     const id = ensureDraft();
     const week = weekOf(getDraft(id), gw);
+    const replacing = new Set(pairs.map((pair) => pair.out.id));
     setWeek(id, gw, {
       transfers: [
-        ...week.transfers.filter((t) => t.out !== transferOut.id),
-        { out: transferOut.id, in: incoming.id, sellPrice: sellPrice(transferOut) },
+        ...week.transfers.filter((t) => !replacing.has(t.out)),
+        ...pairs.map((pair) => ({
+          out: pair.out.id,
+          in: pair.in.id,
+          sellPrice: sellPrice(pair.out),
+        })),
       ],
     });
     setTransferOut(null);
     setTapped(null);
     refreshDrafts();
-  }, [transferOut, ensureDraft, gw, refreshDrafts]);
+  }, [ensureDraft, gw, refreshDrafts]);
 
   const writeLineup = useCallback((members) => {
     const id = ensureDraft();
@@ -205,11 +213,24 @@ export default function Home() {
       return member;
     }).sort((x, y) => x.slot - y.slot);
 
+    /* A refused swap now says why. Silently doing nothing looked identical to a broken tap, which
+       is the worst way to communicate a rule. */
     if (!isLegalXI(next)) {
+      const shape = formationOf(next);
+      setSwapNote(
+        shape.gk !== 1
+          ? "You need exactly one goalkeeper in the eleven."
+          : shape.def < 3
+            ? "You need at least three defenders."
+            : shape.fwd < 1
+              ? "You need at least one forward."
+              : `${shape.def}-${shape.mid}-${shape.fwd} is not a legal formation.`,
+      );
       setSwapping(null);
       setTapped(null);
       return;
     }
+    setSwapNote(null);
     writeLineup(next);
     setSwapping(null);
     setTapped(null);
@@ -427,6 +448,18 @@ export default function Home() {
           }}
         >
           {problems[0]}
+        </div>
+      )}
+
+      {swapNote && (
+        <div
+          style={{
+            margin: `${S.sm}px ${S.page}px 0`, padding: `${S.md}px ${S.lg}px`, borderRadius: R.card,
+            background: "rgba(255,61,110,0.12)", fontSize: F.small, color: C.risk, textAlign: "center",
+          }}
+          onClick={() => setSwapNote(null)}
+        >
+          {swapNote}
         </div>
       )}
 

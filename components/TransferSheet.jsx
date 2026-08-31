@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Sheet, Pill, Chip, FixtureTag, Empty } from "./UI";
 import PlayerPhoto from "./PlayerPhoto";
 import { C, S, R, F, W } from "../lib/theme";
@@ -33,10 +33,27 @@ const SORTS = [
   { value: "owned", label: "Owned" },
 ];
 
+/* JOINT TRANSFERS.
+ *
+ * Selling one player at a time means a move you can plainly afford is refused because the single
+ * sale does not cover the single purchase. Real transfer plans fund an expensive signing by making
+ * a second move alongside it, and the money only has to balance across the whole set.
+ *
+ * So this screen holds a list of pairs. Each pair is a player leaving and, once chosen, a player
+ * arriving. The budget is the bank plus everything being sold, less everything already bought, and
+ * a candidate is affordable when the set still balances rather than when that one swap does. */
 export default function TransferSheet({
   open, onClose, outgoing, members, bootstrap, bank, gw, gwTo,
   freeTransfers, transfersUsed, onConfirm, neverBuy = [],
 }) {
+  const [pairs, setPairs] = useState([]);
+  const [picking, setPicking] = useState(null);
+  const [addingSeller, setAddingSeller] = useState(false);
+
+  /* Opening on a new player resets the set to just that player. */
+  useEffect(() => {
+    if (outgoing) { setPairs([{ out: outgoing, in: null }]); setPicking(0); setAddingSeller(false); }
+  }, [outgoing]);
   const [query, setQuery] = useState("");
   const [sort, setSort] = usePersistentState("transfer.sort", "xpts");
   const [clubs, setClubs] = usePersistentState("transfer.clubs", []);
@@ -45,29 +62,41 @@ export default function TransferSheet({
   const [showFilters, setShowFilters] = usePersistentState("transfer.showFilters", false);
 
   const rangeTo = Math.min(gwTo ?? gw, SERVED_GW_TO);
-  const proceeds = outgoing ? sellPrice(outgoing) : 0;
-  const budget = bank + proceeds;
+  /* Everything being sold, less everything already bought. */
+  const proceeds = pairs.reduce((sum, pair) => sum + sellPrice(pair.out), 0);
+  const spent = pairs.reduce((sum, pair) => sum + (pair.in ? pair.in.price : 0), 0);
+  const budget = bank + proceeds - spent;
+  const slot = picking !== null ? pairs[picking] : null;
+  const filled = pairs.filter((pair) => pair.in).length;
 
   /* Club counts excluding the player leaving, since selling him frees a slot at his club. */
   const clubCounts = useMemo(() => {
+    const leaving = new Set(pairs.map((pair) => pair.out.id));
     const counts = new Map();
     for (const member of members) {
-      if (outgoing && member.id === outgoing.id) continue;
+      if (leaving.has(member.id)) continue;
       counts.set(member.team, (counts.get(member.team) || 0) + 1);
     }
+    /* Players already chosen in this set count against the limit too. */
+    for (const pair of pairs) {
+      if (pair.in) counts.set(pair.in.team, (counts.get(pair.in.team) || 0) + 1);
+    }
     return counts;
-  }, [members, outgoing]);
+  }, [members, pairs]);
 
-  const squadIds = useMemo(() => new Set(members.map((member) => member.id)), [members]);
+  const squadIds = useMemo(
+    () => new Set([...members.map((m) => m.id), ...pairs.filter((p) => p.in).map((p) => p.in.id)]),
+    [members, pairs],
+  );
   const banned = useMemo(() => new Set(neverBuy), [neverBuy]);
 
   const rows = useMemo(() => {
-    if (!outgoing) return [];
+    if (!slot) return [];
     const text = query.trim().toLowerCase();
 
     return bootstrap.players
-      .filter((player) => player.position === outgoing.position)
-      .filter((player) => player.id !== outgoing.id)
+      .filter((player) => player.position === slot.out.position)
+      .filter((player) => player.id !== slot.out.id)
       .filter((player) => !squadIds.has(player.id))
       .filter((player) => (clubs.length ? clubs.includes(player.team) : true))
       .filter((player) => (maxPrice ? player.price <= maxPrice : true))
@@ -82,7 +111,12 @@ export default function TransferSheet({
         return {
           ...player,
           xpts: projection.total,
-          blocked: clubFull ? `${CLUB_LIMIT} from ${player.team}` : tooDear ? "Too expensive" : null,
+          /* Only the club limit blocks a pick outright, because no amount of extra selling fixes
+             it unless you sell someone from that club, which is a different decision. Money is not
+             a block: pick who you want and fund it by selling more. The confirm bar refuses until
+             the set balances. */
+          blocked: clubFull ? `${CLUB_LIMIT} from ${player.team}` : null,
+          short: tooDear ? player.price - budget : 0,
           isBanned: banned.has(player.id),
         };
       })
@@ -90,6 +124,7 @@ export default function TransferSheet({
         /* Blocked players sink rather than disappear. Seeing that the man you want is one club slot
            away is useful; silently hiding him is not. */
         if (Boolean(a.blocked) !== Boolean(b.blocked)) return a.blocked ? 1 : -1;
+        if (Boolean(a.short) !== Boolean(b.short)) return a.short ? 1 : -1;
         if (sort === "price") return b.price - a.price;
         if (sort === "points") return b.totalPoints - a.totalPoints;
         if (sort === "form") return b.form - a.form;
@@ -98,20 +133,21 @@ export default function TransferSheet({
         return b.xpts - a.xpts;
       })
       .slice(0, 120);
-  }, [bootstrap.players, outgoing, squadIds, clubs, maxPrice, query, hideDoubtful,
+  }, [bootstrap.players, slot, squadIds, clubs, maxPrice, query, hideDoubtful,
       gw, rangeTo, clubCounts, budget, sort, banned]);
 
-  if (!outgoing) return null;
+  if (!outgoing || !pairs.length) return null;
 
-  const outProjection = xptsRange(outgoing.id, gw, rangeTo).total;
-  const willCostHit = transfersUsed >= freeTransfers;
+  const outProjection = slot ? xptsRange(slot.out.id, gw, rangeTo).total : 0;
+  const moves = transfersUsed + pairs.length;
+  const hits = Math.max(0, moves - freeTransfers) * HIT_COST;
 
   return (
     <Sheet
       open={open}
       onClose={onClose}
-      title={`Replace ${outgoing.name}`}
-      subtitle={`£${budget.toFixed(1)}m available · ${willCostHit ? `costs ${HIT_COST} pts` : "free transfer"}`}
+      title={pairs.length > 1 ? `${pairs.length} transfers` : `Replace ${pairs[0].out.name}`}
+      subtitle={`£${budget.toFixed(1)}m to spend · ${hits > 0 ? `−${hits} pts` : `${pairs.length} free`}`}
       action={(
         <div style={{ display: "flex", gap: S.sm, flexShrink: 0 }}>
         <button
@@ -139,7 +175,77 @@ export default function TransferSheet({
         </div>
       )}
     >
-      <div style={{ padding: "12px 16px 8px", borderBottom: `1px solid ${C.borderSoft}` }}>
+      {/* THE SET. Every pair, and a control to sell another player so an expensive signing can be
+          funded by a second move rather than being refused outright. */}
+      <div style={{ padding: `${S.md}px ${S.page}px`, borderBottom: `1px solid ${C.borderSoft}` }}>
+        {pairs.map((pair, index) => (
+          <div
+            key={pair.out.id}
+            onClick={() => setPicking(index)}
+            className="press"
+            style={{
+              display: "flex", alignItems: "center", gap: S.sm, padding: `${S.sm}px ${S.md}px`,
+              borderRadius: R.lg, marginBottom: S.sm, cursor: "pointer",
+              background: picking === index ? C.surfaceHi : "transparent",
+              border: `1px solid ${picking === index ? C.xp : "transparent"}`,
+            }}
+          >
+            <span style={{ fontSize: F.small, color: C.risk }}>{pair.out.name}</span>
+            <span style={{ color: C.textFaint }}>→</span>
+            <span style={{ fontSize: F.small, color: pair.in ? C.good : C.textDim, fontWeight: W.semi }}>
+              {pair.in ? pair.in.name : "choose"}
+            </span>
+            <span className="num" style={{ marginLeft: "auto", fontSize: F.micro, color: C.textDim }}>
+              {pair.in
+                ? `${(pair.in.price - sellPrice(pair.out) >= 0 ? "+" : "")}£${(pair.in.price - sellPrice(pair.out)).toFixed(1)}m`
+                : `£${sellPrice(pair.out).toFixed(1)}m`}
+            </span>
+            {pairs.length > 1 && (
+              <button
+                onClick={(event) => {
+                  event.stopPropagation();
+                  const next = pairs.filter((_, i) => i !== index);
+                  setPairs(next);
+                  setPicking(next.findIndex((p) => !p.in) === -1 ? 0 : next.findIndex((p) => !p.in));
+                }}
+                style={{ color: C.textDim, fontSize: F.heading, width: 28 }}
+              >×</button>
+            )}
+          </div>
+        ))}
+
+        <button
+          onClick={() => setAddingSeller((value) => !value)}
+          className="press"
+          style={{
+            width: "100%", height: 40, borderRadius: R.lg, background: C.surfaceHi,
+            fontSize: F.small, fontWeight: W.semi, color: addingSeller ? C.xp : C.text,
+          }}
+        >
+          {addingSeller ? "Close" : "Sell another player to fund this"}
+        </button>
+
+        {addingSeller && (
+          <div className="fade-up hscroll" style={{ display: "flex", gap: S.sm, marginTop: S.sm, overflowX: "auto" }}>
+            {members
+              .filter((member) => !pairs.some((pair) => pair.out.id === member.id))
+              .map((member) => (
+                <Chip
+                  key={member.id}
+                  onClick={() => {
+                    setPairs((current) => [...current, { out: member, in: null }]);
+                    setPicking(pairs.length);
+                    setAddingSeller(false);
+                  }}
+                >
+                  {member.name} £{sellPrice(member).toFixed(1)}
+                </Chip>
+              ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{ padding: `${S.md}px ${S.page}px ${S.sm}px`, borderBottom: `1px solid ${C.borderSoft}` }}>
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -213,13 +319,39 @@ export default function TransferSheet({
           display: "flex", alignItems: "center", gap: 10, fontSize: 12,
         }}
       >
-        <span style={{ color: C.textDim, fontSize: F.micro, letterSpacing: "0.03em", fontWeight: W.semi }}>OUT</span>
-        <span style={{ fontWeight: W.semi }}>{outgoing.name}</span>
-        <span className="num" style={{ color: C.textDim }}>£{sellPrice(outgoing).toFixed(1)}m</span>
+        <span style={{ color: C.textDim, fontSize: F.micro, letterSpacing: "0.03em", fontWeight: W.semi }}>
+          REPLACING
+        </span>
+        <span style={{ fontWeight: W.semi }}>{slot ? slot.out.name : "—"}</span>
         <span className="num" style={{ color: C.text, marginLeft: "auto", fontWeight: W.bold }}>
           £{budget.toFixed(1)}m to spend
         </span>
       </div>
+
+      {filled === pairs.length && (
+        <div
+          className="fade-up"
+          style={{
+            position: "sticky", top: 0, zIndex: 5, padding: `${S.md}px ${S.page}px`,
+            background: C.surface, borderBottom: `1px solid ${C.borderSoft}`,
+          }}
+        >
+          <button
+            onClick={() => onConfirm?.(pairs)}
+            disabled={budget < -0.001}
+            className="press"
+            style={{
+              width: "100%", height: S.tap, borderRadius: R.lg, fontSize: F.body, fontWeight: W.bold,
+              background: budget < -0.001 ? C.surfaceHi : C.xp,
+              color: budget < -0.001 ? C.risk : "#000",
+            }}
+          >
+            {budget < -0.001
+              ? `Over budget by £${Math.abs(budget).toFixed(1)}m`
+              : `Confirm ${pairs.length} transfer${pairs.length === 1 ? "" : "s"}${hits > 0 ? ` · −${hits} pts` : ""}`}
+          </button>
+        </div>
+      )}
 
       {rows.length === 0 ? (
         <Empty title="Nobody matches" detail="Widen the filters or clear the search." />
@@ -233,12 +365,18 @@ export default function TransferSheet({
               <button
                 key={player.id}
                 disabled={disabled}
-                onClick={() => onConfirm?.(player)}
+                onClick={() => {
+                  const next = pairs.map((pair, i) => (i === picking ? { ...pair, in: player } : pair));
+                  setPairs(next);
+                  const nextEmpty = next.findIndex((pair) => !pair.in);
+                  setPicking(nextEmpty === -1 ? picking : nextEmpty);
+                  setQuery("");
+                }}
                 className={disabled ? "" : "press"}
                 style={{
                   width: "100%", display: "flex", alignItems: "center", gap: 11,
                   padding: "9px 16px", borderBottom: `1px solid ${C.borderSoft}`,
-                  opacity: disabled ? 0.38 : 1, textAlign: "left",
+                  opacity: disabled ? 0.35 : player.short ? 0.72 : 1, textAlign: "left",
                 }}
               >
                 <PlayerPhoto code={player.code} size={38} radius={8} />
@@ -261,7 +399,12 @@ export default function TransferSheet({
                       size={9.5}
                     />
                     {player.blocked && (
-                      <span style={{ fontSize: 10, color: C.risk, fontWeight: 600 }}>{player.blocked}</span>
+                      <span style={{ fontSize: F.micro, color: C.risk, fontWeight: W.semi }}>{player.blocked}</span>
+                    )}
+                    {!player.blocked && player.short > 0 && (
+                      <span style={{ fontSize: F.micro, color: C.warn, fontWeight: W.semi }}>
+                        sell £{player.short.toFixed(1)}m more
+                      </span>
                     )}
                   </div>
                 </div>
