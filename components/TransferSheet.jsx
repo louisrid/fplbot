@@ -60,8 +60,12 @@ export default function TransferSheet({
   const [maxPrice, setMaxPrice] = usePersistentState("transfer.maxPrice", null);
   const [hideDoubtful, setHideDoubtful] = usePersistentState("transfer.hideDoubtful", false);
   const [showFilters, setShowFilters] = usePersistentState("transfer.showFilters", false);
+  const [range, setRange] = usePersistentState("transfer.range", 5);
 
-  const rangeTo = Math.min(gwTo ?? gw, SERVED_GW_TO);
+  /* The window xPTS is measured over, chosen here rather than inherited, because who is worth
+     signing depends entirely on how far ahead you are looking. */
+  const rangeTo = Math.min(gw + range - 1, SERVED_GW_TO);
+  const fixtureCount = Math.max(1, Math.min(range, SERVED_GW_TO - gw + 1));
   /* Everything being sold, less everything already bought. */
   const proceeds = pairs.reduce((sum, pair) => sum + sellPrice(pair.out), 0);
   const spent = pairs.reduce((sum, pair) => sum + (pair.in ? pair.in.price : 0), 0);
@@ -108,8 +112,13 @@ export default function TransferSheet({
         const projection = xptsRange(player.id, gw, rangeTo);
         const clubFull = (clubCounts.get(player.team) || 0) >= CLUB_LIMIT;
         const tooDear = player.price > budget + 0.001;
+        const runs = [];
+        for (let week = gw; week < gw + fixtureCount && week <= 38; week += 1) {
+          runs.push(opponentLabel(bootstrap.fixtures, bootstrap.teamsById, player.teamId, week));
+        }
         return {
           ...player,
+          runs,
           xpts: projection.total,
           /* Only the club limit blocks a pick outright, because no amount of extra selling fixes
              it unless you sell someone from that club, which is a different decision. Money is not
@@ -260,6 +269,19 @@ export default function TransferSheet({
           <div className="fade-up" style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
             <div>
               <div style={{ fontSize: F.micro, color: C.text, marginBottom: S.sm, fontWeight: W.semi, letterSpacing: "0.03em" }}>
+                xPTS OVER
+              </div>
+              <div className="hscroll" style={{ display: "flex", gap: S.sm, overflowX: "auto", paddingBottom: 2 }}>
+                {[1, 3, 5, 8].map((weeks) => (
+                  <Chip key={weeks} active={range === weeks} onClick={() => setRange(weeks)}>
+                    {weeks === 1 ? "1 GW" : `${weeks} GWs`}
+                  </Chip>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: F.micro, color: C.text, marginBottom: S.sm, fontWeight: W.semi, letterSpacing: "0.03em" }}>
                 SORT BY
               </div>
               <div className="scroll" style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 2 }}>
@@ -323,33 +345,24 @@ export default function TransferSheet({
           REPLACING
         </span>
         <span style={{ fontWeight: W.semi }}>{slot ? slot.out.name : "—"}</span>
-        <span className="num" style={{ color: C.text, marginLeft: "auto", fontWeight: W.bold }}>
-          £{budget.toFixed(1)}m to spend
+        <span className="num" style={{ marginLeft: "auto", fontSize: F.micro, color: C.textDim, fontWeight: W.semi }}>
+          GW{gw}{rangeTo > gw ? `–${rangeTo}` : ""}
+        </span>
+        <span className="num" style={{ color: C.text, fontWeight: W.bold }}>
+          £{budget.toFixed(1)}m
         </span>
       </div>
 
-      {filled === pairs.length && (
+      {filled === pairs.length && budget < -0.001 && (
         <div
           className="fade-up"
           style={{
             position: "sticky", top: 0, zIndex: 5, padding: `${S.md}px ${S.page}px`,
-            background: C.surface, borderBottom: `1px solid ${C.borderSoft}`,
+            background: "rgba(255,61,110,0.12)", borderBottom: `1px solid ${C.borderSoft}`,
+            fontSize: F.small, color: C.risk, textAlign: "center", fontWeight: W.semi,
           }}
         >
-          <button
-            onClick={() => onConfirm?.(pairs)}
-            disabled={budget < -0.001}
-            className="press"
-            style={{
-              width: "100%", height: S.tap, borderRadius: R.lg, fontSize: F.body, fontWeight: W.bold,
-              background: budget < -0.001 ? C.surfaceHi : C.xp,
-              color: budget < -0.001 ? C.risk : "#000",
-            }}
-          >
-            {budget < -0.001
-              ? `Over budget by £${Math.abs(budget).toFixed(1)}m`
-              : `Confirm ${pairs.length} transfer${pairs.length === 1 ? "" : "s"}${hits > 0 ? ` · −${hits} pts` : ""}`}
-          </button>
+          £{Math.abs(budget).toFixed(1)}m short. Sell another player to fund it.
         </div>
       )}
 
@@ -358,7 +371,6 @@ export default function TransferSheet({
       ) : (
         <div>
           {rows.map((player) => {
-            const gain = player.xpts - outProjection;
             const disabled = Boolean(player.blocked);
 
             return (
@@ -371,6 +383,14 @@ export default function TransferSheet({
                   const nextEmpty = next.findIndex((pair) => !pair.in);
                   setPicking(nextEmpty === -1 ? picking : nextEmpty);
                   setQuery("");
+
+                  /* Every slot filled and the money balances: the transfer is made. There is
+                     nothing left to confirm, and asking anyway is a step that only ever costs a
+                     tap. If it does not balance, the sheet stays open and says what is short. */
+                  const remaining = bank
+                    + next.reduce((sum, pair) => sum + sellPrice(pair.out), 0)
+                    - next.reduce((sum, pair) => sum + (pair.in ? pair.in.price : 0), 0);
+                  if (nextEmpty === -1 && remaining >= -0.001) onConfirm?.(next);
                 }}
                 className={disabled ? "" : "press"}
                 style={{
@@ -388,16 +408,9 @@ export default function TransferSheet({
                     </span>
                     {player.isBanned && <Pill colour={C.risk} size={9}>Never buy</Pill>}
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
-                    <span className="num" style={{ fontSize: 11, color: C.textDim }}>{player.team}</span>
-                    <span className="num" style={{ fontSize: 11, color: C.textDim }}>£{player.price.toFixed(1)}</span>
-                    <FixtureTag
-                      {...(() => {
-                        const label = opponentLabel(bootstrap.fixtures, bootstrap.teamsById, player.teamId, gw);
-                        return { text: label.text, difficulty: label.difficulty };
-                      })()}
-                      size={9.5}
-                    />
+                  <div style={{ display: "flex", alignItems: "center", gap: S.sm, marginTop: 2 }}>
+                    <span className="num" style={{ fontSize: F.tiny, color: C.textDim }}>{player.team}</span>
+                    <span className="num" style={{ fontSize: F.tiny, color: C.textDim }}>£{player.price.toFixed(1)}</span>
                     {player.blocked && (
                       <span style={{ fontSize: F.micro, color: C.risk, fontWeight: W.semi }}>{player.blocked}</span>
                     )}
@@ -407,27 +420,31 @@ export default function TransferSheet({
                       </span>
                     )}
                   </div>
+
+                  {/* His whole run over the chosen window, not just the next match. Which fixtures
+                      are coming is most of the reason to sign someone. */}
+                  <div style={{ display: "flex", gap: 3, marginTop: 4, flexWrap: "wrap" }}>
+                    {player.runs.map((run, index) => (
+                      <FixtureTag key={index} text={run.text} difficulty={run.difficulty} size={F.micro - 1} />
+                    ))}
+                  </div>
                 </div>
 
-                <div style={{ textAlign: "right", flexShrink: 0, minWidth: 62 }}>
-                  <div className="num" style={{ fontSize: F.body, fontWeight: W.bold, color: C.xp }}>
+                <div style={{ textAlign: "right", flexShrink: 0, minWidth: 56 }}>
+                  <div className="num" style={{ fontSize: F.heading, fontWeight: W.bold, color: C.xp }}>
                     {player.xpts.toFixed(1)}
                   </div>
-                  <div
-                    className="num"
-                    style={{ fontSize: F.micro, fontWeight: W.semi, color: gain > 0 ? C.good : C.textDim }}
-                  >
-                    {gain > 0 ? "+" : ""}{gain.toFixed(1)} xPTS
+                  <div style={{ fontSize: F.micro - 1, color: C.textDim, fontWeight: W.semi }}>
+                    xPTS
                   </div>
-                  {/* What the bank would hold after this purchase. */}
                   <div
                     className="num"
                     style={{
-                      fontSize: F.micro, fontWeight: W.semi, marginTop: 2,
+                      fontSize: F.micro, fontWeight: W.semi, marginTop: 3,
                       color: budget - player.price < -0.001 ? C.risk : C.textDim,
                     }}
                   >
-                    £{(budget - player.price).toFixed(1)}m left
+                    £{(budget - player.price).toFixed(1)}m
                   </div>
                 </div>
               </button>

@@ -253,13 +253,13 @@ export default function Players() {
                 <div style={{ display: "flex", gap: 14, flexShrink: 0, textAlign: "right" }}>
                   <div>
                     <div className="num" style={{ fontSize: 14, fontWeight: 700 }}>{player.totalPoints}</div>
-                    <div style={{ fontSize: F.micro - 1, color: C.textDim, fontWeight: W.semi, letterSpacing: "0.03em" }}>PTS</div>
+                    <div style={{ fontSize: F.micro - 1, color: C.textDim, fontWeight: W.semi }}>PTS</div>
                   </div>
                   <div>
                     <div className="num" style={{ fontSize: 14, fontWeight: 700, color: C.xp }}>
                       {player.xpts > 0 ? player.xpts.toFixed(1) : "—"}
                     </div>
-                    <div style={{ fontSize: F.micro - 1, color: C.textDim, fontWeight: W.semi, letterSpacing: "0.03em" }}>xPTS</div>
+                    <div style={{ fontSize: F.micro - 1, color: C.textDim, fontWeight: W.semi }}>xPTS</div>
                   </div>
                 </div>
               </Link>
