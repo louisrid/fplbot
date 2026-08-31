@@ -41,7 +41,7 @@ export default function Players() {
   const [maxPrice, setMaxPrice] = usePersistentState("players.maxPrice", null);
   const [hideUnavailable, setHideUnavailable] = usePersistentState("players.hideUnavailable", false);
   const [showFilters, setShowFilters] = usePersistentState("players.showFilters", false);
-  const [range, setRange] = usePersistentState("players.range", 3);
+  const [range, setRange] = usePersistentState("players.range", 1);
   const [limit, setLimit] = useState(60);
 
   const load = useCallback(async () => {
@@ -147,9 +147,9 @@ export default function Players() {
                 xPTS OVER
               </div>
               <div style={{ display: "flex", gap: 6 }}>
-                {[1, 3, 5, 8].map((weeks) => (
+                {[1, 2, 3, 5, 8].map((weeks) => (
                   <Chip key={weeks} active={range === weeks} onClick={() => setRange(weeks)}>
-                    {weeks === 1 ? "1 GW" : `${weeks} GWs`}
+                    {weeks === 1 ? "Next GW" : `${weeks} GWs`}
                   </Chip>
                 ))}
               </div>

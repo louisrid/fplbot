@@ -60,12 +60,17 @@ export default function TransferSheet({
   const [maxPrice, setMaxPrice] = usePersistentState("transfer.maxPrice", null);
   const [hideDoubtful, setHideDoubtful] = usePersistentState("transfer.hideDoubtful", false);
   const [showFilters, setShowFilters] = usePersistentState("transfer.showFilters", false);
-  const [range, setRange] = usePersistentState("transfer.range", 5);
+  /* Default is the next gameweek alone. A projection over an arbitrary multi-week block is not
+     what you asked for and reads as a much bigger number than it is, which is misleading rather
+     than helpful. Widen it deliberately with the toggle when you want the longer view. */
+  const [range, setRange] = usePersistentState("transfer.range", 1);
 
   /* The window xPTS is measured over, chosen here rather than inherited, because who is worth
      signing depends entirely on how far ahead you are looking. */
   const rangeTo = Math.min(gw + range - 1, SERVED_GW_TO);
-  const fixtureCount = Math.max(1, Math.min(range, SERVED_GW_TO - gw + 1));
+  /* The fixture run is independent of the xPTS window. How many matches are coming is useful
+     context whatever period you are scoring over, so it always shows the next five. */
+  const fixtureCount = 5;
   /* Everything being sold, less everything already bought. */
   const proceeds = pairs.reduce((sum, pair) => sum + sellPrice(pair.out), 0);
   const spent = pairs.reduce((sum, pair) => sum + (pair.in ? pair.in.price : 0), 0);
@@ -255,6 +260,31 @@ export default function TransferSheet({
       </div>
 
       <div style={{ padding: `${S.md}px ${S.page}px ${S.sm}px`, borderBottom: `1px solid ${C.borderSoft}` }}>
+        {/* How far ahead xPTS is measured. On screen rather than behind the filter button, because
+            it changes every number in the list below it. */}
+        <div style={{ display: "flex", alignItems: "center", gap: S.sm, marginBottom: S.md }}>
+          <span style={{ fontSize: F.micro, color: C.textDim, fontWeight: W.semi, flexShrink: 0 }}>
+            xPTS
+          </span>
+          <div className="hscroll" style={{ display: "flex", gap: 6, overflowX: "auto" }}>
+            {[1, 2, 3, 5, 8].map((weeks) => (
+              <button
+                key={weeks}
+                onClick={() => setRange(weeks)}
+                className="press"
+                style={{
+                  height: 34, padding: `0 ${S.md}px`, borderRadius: R.lg, whiteSpace: "nowrap",
+                  fontSize: F.small, fontWeight: W.semi,
+                  background: range === weeks ? C.text : C.surfaceHi,
+                  color: range === weeks ? "#000" : C.textDim,
+                }}
+              >
+                {weeks === 1 ? "Next GW" : `${weeks} GWs`}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -267,19 +297,6 @@ export default function TransferSheet({
 
         {showFilters && (
           <div className="fade-up" style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-            <div>
-              <div style={{ fontSize: F.micro, color: C.text, marginBottom: S.sm, fontWeight: W.semi, letterSpacing: "0.03em" }}>
-                xPTS OVER
-              </div>
-              <div className="hscroll" style={{ display: "flex", gap: S.sm, overflowX: "auto", paddingBottom: 2 }}>
-                {[1, 3, 5, 8].map((weeks) => (
-                  <Chip key={weeks} active={range === weeks} onClick={() => setRange(weeks)}>
-                    {weeks === 1 ? "1 GW" : `${weeks} GWs`}
-                  </Chip>
-                ))}
-              </div>
-            </div>
-
             <div>
               <div style={{ fontSize: F.micro, color: C.text, marginBottom: S.sm, fontWeight: W.semi, letterSpacing: "0.03em" }}>
                 SORT BY
@@ -346,7 +363,7 @@ export default function TransferSheet({
         </span>
         <span style={{ fontWeight: W.semi }}>{slot ? slot.out.name : "—"}</span>
         <span className="num" style={{ marginLeft: "auto", fontSize: F.micro, color: C.textDim, fontWeight: W.semi }}>
-          GW{gw}{rangeTo > gw ? `–${rangeTo}` : ""}
+          {rangeTo > gw ? `GW${gw}–${rangeTo}` : `GW${gw} only`}
         </span>
         <span className="num" style={{ color: C.text, fontWeight: W.bold }}>
           £{budget.toFixed(1)}m
