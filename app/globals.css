@@ -1,0 +1,70 @@
+:root {
+  --bg: #000000;
+  --surface: #101012;
+  --surface-hi: #1A1A1E;
+  --border: #2A2A30;
+  --text: #FFFFFF;
+  --text-dim: #E8E8ED;
+  --text-faint: #9A9AA6;
+  --xp: #4FD8FF;
+  --tab-bar: 64px;
+  --page: 16px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+html { background: #000; }
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  /* Supplied by next/font in the root layout. */
+  font-family: var(--font-app), -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  letter-spacing: -0.011em;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overscroll-behavior-y: none;
+}
+
+body { padding-bottom: calc(var(--tab-bar) + env(safe-area-inset-bottom)); }
+
+button, input, select, textarea { font: inherit; color: inherit; background: none; border: none; }
+button { cursor: pointer; }
+a { color: inherit; text-decoration: none; }
+img { display: block; }
+
+/* Every number in the app uses tabular figures, so a score changing from 9 to 10 does not shift
+   the row it sits in. */
+.num { font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+
+.frame {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: calc(100dvh - var(--tab-bar) - env(safe-area-inset-bottom));
+  position: relative;
+}
+
+.scroll { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.scroll::-webkit-scrollbar { width: 0; height: 0; }
+.hscroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.hscroll::-webkit-scrollbar { width: 0; height: 0; }
+
+.press { transition: transform 0.08s ease, opacity 0.08s ease; }
+.press:active { transform: scale(0.975); opacity: 0.8; }
+
+@keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sheetUp { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.fade-up { animation: fadeUp 0.2s ease both; }
+.fade-in { animation: fadeIn 0.16s ease both; }
+.sheet-up { animation: sheetUp 0.24s cubic-bezier(0.32, 0.72, 0, 1) both; }
+.live-dot { animation: pulse 1.8s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
