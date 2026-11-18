@@ -494,8 +494,25 @@ client.once('clientReady', async () => {
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
   memberCountChannel = await guild.channels.fetch(cfg.memberCountChannelId).catch(() => null);
+  if (!memberCountChannel) {
+    memberCountChannel = [...guild.channels.cache.values()].find((c) =>
+      (c.type === 2 || c.type === 13) && /^Members:/i.test(c.name)
+    ) || null;
+  }
+  if (!memberCountChannel) {
+    if (!guild.members.me.permissions.has('ManageChannels')) {
+      console.warn('Member count channel missing and bot lacks Manage Channels permission.');
+    } else {
+      memberCountChannel = await guild.channels.create({
+        name: desiredMemberCountName(),
+        type: 2,
+        reason: 'Create Fanvue live member count channel'
+      });
+      console.log('MEMBER_COUNT_CHANNEL_CREATED ' + memberCountChannel.id + ' ' + memberCountChannel.name);
+    }
+  }
   if (!invitesChannel || !landingChannel) throw new Error('Could not find #invites and/or #join. Set their IDs in Render environment variables.');
-  if (!memberCountChannel) console.warn('Member count voice channel not found: ' + cfg.memberCountChannelId);
+  if (!memberCountChannel) console.warn('Member count voice channel could not be resolved or created.');
   creatorRole = await resolveCreatorRole();
   if (!creatorRole) console.warn('NEW CREATOR role not resolved. Using screening + no-role fallback quality checks.');
   else console.log(`Quality role: ${creatorRole.name} (${creatorRole.id})`);
