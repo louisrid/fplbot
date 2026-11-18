@@ -24,6 +24,7 @@ if (!token || !guildId) throw new Error('DISCORD_TOKEN and GUILD_ID are required
 const cfg = {
   roleId: process.env.NEW_CREATOR_ROLE_ID?.trim() || '',
   roleQuery: process.env.NEW_CREATOR_ROLE_QUERY || 'NEW CREATOR',
+  qualitySweepMs: Math.max(60000, Number(process.env.QUALITY_SWEEP_MS || 300000)),
   minAccountAgeHours: Math.max(0, Number(process.env.MIN_ACCOUNT_AGE_HOURS || 24)),
   creatorRoleGraceHours: Math.max(1, Number(process.env.CREATOR_ROLE_GRACE_HOURS || 48)),
   invitesChannelId: process.env.INVITES_CHANNEL_ID?.trim() || '',
@@ -72,6 +73,7 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 let guild, invitesChannel, landingChannel, creatorRole;
 let syncing = false;
 let refreshTimer = null;
+let qualityTimer = null;
 let joinQueue = Promise.resolve();
 
 async function findChannel(id, name) {
@@ -473,16 +475,11 @@ client.once('clientReady', async () => {
   await updateLeaderboard(true);
   await qualitySweep();
 
-  refreshTimer = setInterval(async () => {
-    try {
-      await syncInviteCounters();
-      await qualitySweep();
-    } catch (err) {
-      console.error(err);
-    }
-  }, cfg.pollMs);
+  refreshTimer = setInterval(() => syncInviteCounters().catch(console.error), cfg.pollMs);
   refreshTimer.unref();
-  console.log(`READY ${client.user.tag} · ${guild.name} · live + quality sync every ${cfg.pollMs/1000}s`);
+  qualityTimer = setInterval(() => qualitySweep().catch(console.error), cfg.qualitySweepMs);
+  qualityTimer.unref();
+  console.log(`READY ${client.user.tag} · ${guild.name} · live sync ${cfg.pollMs/1000}s · quality sweep ${cfg.qualitySweepMs/60000}m`);
 });
 
 client.on('guildMemberAdd', (member) => {
