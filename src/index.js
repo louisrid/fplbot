@@ -323,10 +323,10 @@ async function recoverMappings(invites) {
 
 async function leaderboardPayload() {
   const wk = weekKey();
-  const rows = Object.entries(state.weeks[wk] || {}).sort((a, b) => b[1] - a[1]).slice(0, 3);
-  const medals = ['🥇', '🥈', '🥉'];
-  const labels = ['1ST', '2ND', '3RD'];
-  const podium = (await Promise.all([0,1,2].map(async (i) => {
+  const rows = Object.entries(state.weeks[wk] || {}).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const medals = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'];
+  const labels = ['1ST', '2ND', '3RD', '4TH', '5TH'];
+  const podium = (await Promise.all([0,1,2,3,4].map(async (i) => {
     const row = rows[i];
     if (!row) return `${medals[i]} **${labels[i]}**  →  **0 invites**`;
     const [uid, count] = row;
@@ -350,6 +350,7 @@ async function leaderboardPayload() {
   c.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
   c.addTextDisplayComponents(
     new TextDisplayBuilder().setContent(`## 🏆 THIS WEEK\n${podium}`),
+    new TextDisplayBuilder().setContent('**🎁 Top 5 each win a prize.**'),
     new TextDisplayBuilder().setContent('*Counts immediately · low-quality or departed referrals can be auto-revoked · resets Monday 00:00 UK*')
   );
   c.addSeparatorComponents(new SeparatorBuilder().setDivider(false).setSpacing(SeparatorSpacingSize.Small));
