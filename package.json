@@ -12,6 +12,7 @@
     "node": ">=24.17.0"
   },
   "dependencies": {
-    "discord.js": "14.28.1"
+    "discord.js": "14.28.1",
+    "ioredis": "5.8.2"
   }
 }
