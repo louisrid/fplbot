@@ -1,6 +1,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import Redis from 'ioredis';
 import {
   ActionRowBuilder,
   AuditLogEvent,
@@ -25,7 +26,6 @@ const cfg = {
   roleId: process.env.NEW_CREATOR_ROLE_ID?.trim() || '',
   roleQuery: process.env.NEW_CREATOR_ROLE_QUERY || 'NEW CREATOR',
   qualitySweepMs: Math.max(60000, Number(process.env.QUALITY_SWEEP_MS || 300000)),
-  minAccountAgeHours: Math.max(0, Number(process.env.MIN_ACCOUNT_AGE_HOURS || 24)),
   creatorRoleGraceHours: Math.max(1, Number(process.env.CREATOR_ROLE_GRACE_HOURS || 48)),
   invitesChannelId: process.env.INVITES_CHANNEL_ID?.trim() || '',
   invitesChannelName: process.env.INVITES_CHANNEL_NAME || '🎁｜invites',
@@ -34,23 +34,51 @@ const cfg = {
   dataDir: path.resolve(process.env.DATA_DIR || './data'),
   port: Number(process.env.PORT || 10000),
   timeZone: process.env.TIME_ZONE || 'Europe/London',
-  pollMs: Math.max(5000, Number(process.env.POLL_MS || 15000)),
+  pollMs: Math.max(5000, Number(process.env.POLL_MS || 5000)),
 };
 
 fs.mkdirSync(cfg.dataDir, { recursive: true });
 const statePath = path.join(cfg.dataDir, 'state.json');
+const redis = process.env.REDIS_URL ? new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: 3 }) : null;
+const STATE_KEY = 'fanvue:invite-state:v2';
+const INSTANCE_ID = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 const blankState = () => ({ links: {}, weeks: {}, referrals: {}, names: {}, messageId: null, lastWeek: null });
 let state = blankState();
 try { state = { ...blankState(), ...JSON.parse(fs.readFileSync(statePath, 'utf8')) }; } catch {}
-state.links ||= {};
-state.weeks ||= {};
-state.referrals ||= {};
-state.names ||= {};
-const save = () => {
-  const tmp = `${statePath}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
-  fs.renameSync(tmp, statePath);
-};
+
+function normaliseState() {
+  state.links ||= {};
+  state.weeks ||= {};
+  state.referrals ||= {};
+  state.names ||= {};
+}
+normaliseState();
+
+async function loadSharedState() {
+  if (!redis) return;
+  const raw = await redis.get(STATE_KEY).catch((err) => { console.error('REDIS_LOAD_FAILED', err); return null; });
+  if (raw) {
+    try { state = { ...blankState(), ...JSON.parse(raw) }; normaliseState(); } catch (err) { console.error('REDIS_STATE_PARSE_FAILED', err); }
+  } else {
+    await redis.set(STATE_KEY, JSON.stringify(state)).catch((err) => console.error('REDIS_INIT_FAILED', err));
+  }
+}
+
+async function save() {
+  normaliseState();
+  try {
+    const tmp = `${statePath}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+    fs.renameSync(tmp, statePath);
+  } catch (err) { console.error('LOCAL_STATE_SAVE_FAILED', err); }
+  if (redis) await redis.set(STATE_KEY, JSON.stringify(state)).catch((err) => console.error('REDIS_SAVE_FAILED', err));
+}
+
+async function acquireLock(name, ttlSeconds = 30) {
+  if (!redis) return true;
+  const result = await redis.set(`fanvue:lock:${name}`, INSTANCE_ID, 'EX', ttlSeconds, 'NX').catch((err) => { console.error('REDIS_LOCK_FAILED', err); return null; });
+  return result === 'OK';
+}
 
 function norm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
 function weekKey(now = new Date()) {
@@ -238,14 +266,16 @@ async function consumeInviteDelta(member) {
   candidates.sort((a, b) => b.delta - a.delta || a.invite.code.localeCompare(b.invite.code));
   const chosen = candidates[0];
   chosen.link.lastUses = Number(chosen.link.lastUses || 0) + 1;
-  save();
+  await save();
   if (candidates.length > 1) console.warn(`Invite attribution ambiguous for ${member.id}; chose ${chosen.invite.code}`);
   return { code: chosen.invite.code, referrerId: chosen.link.referrerId };
 }
 
 async function processJoin(member) {
   if (member.guild.id !== guildId) return;
-  await new Promise((resolve) => setTimeout(resolve, 1400));
+  if (!(await acquireLock(`join:${member.id}`, 120))) return;
+  await loadSharedState();
+  await new Promise((resolve) => setTimeout(resolve, 1200));
   const used = await consumeInviteDelta(member);
   if (!used) return;
 
@@ -270,7 +300,7 @@ async function processJoin(member) {
     reason: null,
   };
   addCount(used.referrerId, 1, wk);
-  save();
+  await save();
   await updateLeaderboard(true);
   console.log(`COUNTED ${member.id} -> ${used.referrerId}`);
 }
@@ -282,7 +312,7 @@ async function revokeReferral(memberId, reason) {
   r.reason = reason;
   r.revokedAt = Date.now();
   addCount(r.referrerId, -1, r.week);
-  save();
+  await save();
   await updateLeaderboard(true);
   console.log(`REVOKED ${memberId} -> ${r.referrerId}: ${reason}`);
   return true;
@@ -292,11 +322,6 @@ async function qualitySweep() {
   const now = Date.now();
   for (const r of Object.values(state.referrals)) {
     if (r.status !== 'counted') continue;
-    const accountAgeAtJoin = Number(r.joinedAt || 0) - Number(r.accountCreatedAt || 0);
-    if (r.accountCreatedAt && accountAgeAtJoin < cfg.minAccountAgeHours * 3600000) {
-      await revokeReferral(r.memberId, `account younger than ${cfg.minAccountAgeHours}h at join`);
-      continue;
-    }
     const member = await guild.members.fetch(r.memberId).catch(() => null);
     if (!member) {
       await revokeReferral(r.memberId, 'left server');
@@ -321,8 +346,10 @@ async function qualitySweep() {
 
 async function syncInviteCounters({ bootstrap = false } = {}) {
   if (syncing) return;
+  if (!(await acquireLock('invite-sync', 8))) return;
   syncing = true;
   try {
+    await loadSharedState();
     const invites = await guild.invites.fetch({ cache: false });
     await recoverMappings(invites);
     const wk = weekKey();
@@ -348,7 +375,7 @@ async function syncInviteCounters({ bootstrap = false } = {}) {
     }
 
     state.lastWeek = wk;
-    save();
+    await save();
     if (changed) await updateLeaderboard(true);
   } finally { syncing = false; }
 }
@@ -372,79 +399,6 @@ async function getOrCreateLink(user) {
 }
 
 
-async function runOneTimeServerAudit() {
-  const channels = [...guild.channels.cache.values()]
-    .sort((a,b) => (a.rawPosition ?? 0) - (b.rawPosition ?? 0))
-    .map((c) => {
-      const everyone = c.permissionOverwrites?.cache?.get(guild.roles.everyone.id);
-      const me = c.permissionsFor?.(guild.members.me);
-      return {
-        id: c.id,
-        name: c.name,
-        type: String(c.type),
-        parent: c.parent?.name || null,
-        position: c.rawPosition ?? c.position ?? null,
-        nsfw: c.nsfw ?? null,
-        slowmode: c.rateLimitPerUser ?? null,
-        viewEveryone: everyone ? !everyone.deny.has('ViewChannel') : null,
-        botView: me?.has('ViewChannel') ?? null,
-        botHistory: me?.has('ReadMessageHistory') ?? null
-      };
-    });
-
-  const roles = [...guild.roles.cache.values()]
-    .sort((a,b) => b.position - a.position)
-    .map((r) => ({
-      id: r.id,
-      name: r.name,
-      position: r.position,
-      managed: r.managed,
-      hoist: r.hoist,
-      mentionable: r.mentionable,
-      members: r.members?.size ?? null,
-      permissions: r.permissions.toArray()
-    }));
-
-  const automod = await guild.autoModerationRules.fetch().catch(() => null);
-  let onboarding = null;
-  if (typeof guild.fetchOnboarding === 'function') onboarding = await guild.fetchOnboarding().catch(() => null);
-  const activeInvites = await guild.invites.fetch({ cache: false }).catch(() => null);
-
-  const summary = {
-    name: guild.name,
-    id: guild.id,
-    memberCount: guild.memberCount,
-    premiumTier: guild.premiumTier,
-    verificationLevel: guild.verificationLevel,
-    explicitContentFilter: guild.explicitContentFilter,
-    defaultMessageNotifications: guild.defaultMessageNotifications,
-    mfaLevel: guild.mfaLevel,
-    nsfwLevel: guild.nsfwLevel,
-    features: guild.features,
-    rulesChannel: guild.rulesChannel?.name || null,
-    publicUpdatesChannel: guild.publicUpdatesChannel?.name || null,
-    safetyAlertsChannel: guild.safetyAlertsChannel?.name || null,
-    systemChannel: guild.systemChannel?.name || null,
-    afkChannel: guild.afkChannel?.name || null,
-    channels: channels.length,
-    categories: channels.filter((c) => c.type === '4').length,
-    activeInvites: activeInvites?.size ?? null,
-    automodRules: automod ? [...automod.values()].map((r) => ({ name:r.name, enabled:r.enabled, eventType:r.eventType, triggerType:r.triggerType, actions:r.actions.map((a) => a.type) })) : null,
-    onboarding: onboarding ? {
-      enabled: onboarding.enabled,
-      mode: onboarding.mode,
-      defaultChannels: [...(onboarding.defaultChannels?.values?.() || [])].map((c) => c.name),
-      prompts: [...(onboarding.prompts?.values?.() || [])].map((p) => ({ title:p.title, singleSelect:p.singleSelect, required:p.required, inOnboarding:p.inOnboarding, options:p.options?.size ?? p.options?.length ?? null }))
-    } : null,
-    botPermissions: guild.members.me.permissions.toArray()
-  };
-
-  console.log('SERVER_AUDIT_SUMMARY ' + JSON.stringify(summary));
-  console.log('SERVER_AUDIT_CHANNELS ' + JSON.stringify(channels));
-  console.log('SERVER_AUDIT_ROLES ' + JSON.stringify(roles));
-}
-
-
 async function removeFiveMinuteTypingRequirement() {
   if (guild.verificationLevel === 2) {
     await guild.setVerificationLevel(1, 'Remove 5-minute account-age typing requirement; retain verified-email requirement');
@@ -456,12 +410,12 @@ async function removeFiveMinuteTypingRequirement() {
 
 client.once('clientReady', async () => {
   guild = await client.guilds.fetch(guildId);
+  await loadSharedState();
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
   if (!invitesChannel || !landingChannel) throw new Error('Could not find #invites and/or #join. Set their IDs in Render environment variables.');
-  await runOneTimeServerAudit();
   creatorRole = await resolveCreatorRole();
   if (!creatorRole) console.warn('NEW CREATOR role not resolved. Using screening + no-role fallback quality checks.');
   else console.log(`Quality role: ${creatorRole.name} (${creatorRole.id})`);
@@ -489,6 +443,8 @@ client.on('guildMemberRemove', (member) => {
 
 client.on('interactionCreate', async (i) => {
   if (!i.isButton() || i.guildId !== guildId || !i.customId.startsWith('ref:')) return;
+  if (!(await acquireLock(`interaction:${i.id}`, 60))) return;
+  await loadSharedState();
   try {
     if (cfg.roleId && !i.member?.roles?.cache?.has(cfg.roleId)) {
       await i.reply({ content: 'This invite programme is available to Academy creators.', ephemeral: true });
