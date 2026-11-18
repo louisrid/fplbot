@@ -625,33 +625,8 @@ async function removeFiveMinuteTypingRequirement() {
 
 
 
-async function diagnoseRdlndOnce() {
-  const matches = await guild.members.search({ query: 'rdlnd', limit: 10 }).catch(() => null);
-  if (!matches) {
-    console.warn('RDLND_DIAG search failed');
-    return;
-  }
-  for (const m of matches.values()) {
-    const names = [m.user.username, m.displayName, m.user.globalName].filter(Boolean).map((x) => String(x).toLowerCase());
-    if (!names.some((x) => x.includes('rdlnd'))) continue;
-    const roles = [...m.roles.cache.values()]
-      .filter((r) => r.id !== guild.id)
-      .sort((a,b) => b.position - a.position)
-      .map((r) => ({ id:r.id, name:r.name, position:r.position, managed:r.managed, editable:r.editable }));
-    console.log('RDLND_DIAG ' + JSON.stringify({
-      memberId:m.id,
-      username:m.user.username,
-      displayName:m.displayName,
-      manageable:m.manageable,
-      guildOwner:m.id === guild.ownerId,
-      roles
-    }));
-  }
-}
-
 client.once('clientReady', async () => {
   guild = await client.guilds.fetch(guildId);
-  await diagnoseRdlndOnce();
   await loadSharedState();
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
