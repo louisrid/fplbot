@@ -235,6 +235,15 @@ function overwritePatch(allowBits, denyBits) {
   return patch;
 }
 
+async function removeFiveMinuteTypingRequirement() {
+  if (guild.verificationLevel === 2) {
+    await guild.setVerificationLevel(1, 'Remove 5-minute account-age typing requirement; retain verified-email requirement');
+    console.log('VERIFICATION_LEVEL_CHANGED 2 -> 1');
+  } else {
+    console.log('VERIFICATION_LEVEL_ALREADY ' + guild.verificationLevel);
+  }
+}
+
 async function rollbackPrimaryPermissionOverreachOnce() {
   const markerKey = 'fanvue:rollback:primary-permission-overreach-v1';
   if (redis && await redis.get(markerKey) === 'done') {
