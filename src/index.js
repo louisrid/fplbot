@@ -626,25 +626,8 @@ async function removeFiveMinuteTypingRequirement() {
 
 
 
-async function verifyBotRolePositionOnce() {
-  await guild.roles.fetch();
-  const me = await guild.members.fetch(client.user.id);
-  const matches = await guild.members.search({ query: 'rdlnd', limit: 10 }).catch(() => null);
-  const target = matches ? [...matches.values()].find((m) => m.user.username === 'rdlnd') : null;
-  console.log('ROLE_POSITION_VERIFY ' + JSON.stringify({
-    botHighest: { id: me.roles.highest.id, name: me.roles.highest.name, position: me.roles.highest.position },
-    fanvueRep: guild.roles.cache.get('1539578951364775956') ? { position:guild.roles.cache.get('1539578951364775956').position, editable:guild.roles.cache.get('1539578951364775956').editable } : null,
-    staffHigh: guild.roles.cache.get('1427337798129680523') ? { position:guild.roles.cache.get('1427337798129680523').position, editable:guild.roles.cache.get('1427337798129680523').editable } : null,
-    target: target ? {
-      id: target.id,
-      manageable: target.manageable,
-      roles: [...target.roles.cache.values()].filter((r)=>r.id!==guild.id).sort((a,b)=>b.position-a.position).map((r)=>({id:r.id,name:r.name,position:r.position,editable:r.editable,managed:r.managed}))
-    } : null
-  }));
-}
 client.once('clientReady', async () => {
   guild = await client.guilds.fetch(guildId);
-  await verifyBotRolePositionOnce();
   await loadSharedState();
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
