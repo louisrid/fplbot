@@ -552,8 +552,47 @@ async function removeFiveMinuteTypingRequirement() {
 
 
 
+
+async function inspectPermissionRollbackCandidatesOnce() {
+  const wantedReasons = new Set([
+    'Make creator ranks standalone: inherit lower-rank permissions',
+    'Make creator ranks standalone: inherit lower-rank channel access',
+    'Primary role hierarchy: inherit lower-role permissions',
+    'Primary role hierarchy: inherit lower-role channel access'
+  ]);
+
+  const out = [];
+  let before;
+  for (let page = 0; page < 8; page++) {
+    const logs = await guild.fetchAuditLogs({ limit: 100, ...(before ? { before } : {}) }).catch(() => null);
+    if (!logs) break;
+    const entries = [...logs.entries.values()];
+    if (!entries.length) break;
+
+    for (const e of entries) {
+      if (!wantedReasons.has(String(e.reason || ''))) continue;
+      out.push({
+        id: e.id,
+        action: e.action,
+        reason: e.reason,
+        targetId: e.target?.id || null,
+        targetName: e.target?.name || null,
+        executorId: e.executor?.id || null,
+        createdAt: new Date(e.createdTimestamp).toISOString(),
+        changes: (e.changes || []).map((c) => ({ key:c.key, old:c.old ?? null, new:c.new ?? null }))
+      });
+    }
+
+    before = entries.at(-1)?.id;
+    if (entries.length < 100 || !before) break;
+  }
+
+  console.log('PERM_ROLLBACK_CANDIDATES ' + JSON.stringify(out));
+}
+
 client.once('clientReady', async () => {
   guild = await client.guilds.fetch(guildId);
+  await inspectPermissionRollbackCandidatesOnce();
   await loadSharedState();
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
