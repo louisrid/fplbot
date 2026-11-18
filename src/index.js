@@ -486,8 +486,28 @@ async function removeFiveMinuteTypingRequirement() {
 }
 
 
+
+async function logRoleHierarchyOnce() {
+  await guild.roles.fetch();
+  const roles = [...guild.roles.cache.values()]
+    .filter((r) => r.id !== guild.id)
+    .sort((a,b) => b.position - a.position)
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      position: r.position,
+      managed: r.managed,
+      hoist: r.hoist,
+      mentionable: r.mentionable,
+      members: r.members?.size ?? null,
+      perms: r.permissions.toArray()
+    }));
+  console.log('ROLE_HIERARCHY ' + JSON.stringify(roles));
+}
+
 client.once('clientReady', async () => {
   guild = await client.guilds.fetch(guildId);
+  await logRoleHierarchyOnce();
   await loadSharedState();
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
