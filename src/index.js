@@ -348,12 +348,97 @@ async function getOrCreateLink(user) {
   return i.url;
 }
 
+
+async function runOneTimeServerAudit() {
+  const typeName = (t) => String(t);
+  const now = Date.now();
+  const channels = [];
+  for (const c of [...guild.channels.cache.values()].sort((a,b) => (a.rawPosition ?? 0) - (b.rawPosition ?? 0))) {
+    let lastMessageAt = null;
+    if (c.isTextBased?.() && !c.isDMBased?.() && c.messages?.fetch) {
+      const one = await c.messages.fetch({ limit: 1 }).catch(() => null);
+      const m = one?.first?.();
+      if (m) lastMessageAt = new Date(m.createdTimestamp).toISOString();
+    }
+    const everyone = c.permissionOverwrites?.cache?.get(guild.roles.everyone.id);
+    const me = c.permissionsFor?.(guild.members.me);
+    channels.push({
+      id: c.id,
+      name: c.name,
+      type: typeName(c.type),
+      parent: c.parent?.name || null,
+      position: c.rawPosition ?? c.position ?? null,
+      nsfw: c.nsfw ?? null,
+      slowmode: c.rateLimitPerUser ?? null,
+      viewEveryone: everyone ? !everyone.deny.has('ViewChannel') : null,
+      botView: me?.has('ViewChannel') ?? null,
+      botHistory: me?.has('ReadMessageHistory') ?? null,
+      lastMessageAt,
+      inactiveDays: lastMessageAt ? Math.floor((now - Date.parse(lastMessageAt)) / 86400000) : null
+    });
+  }
+
+  const roles = [...guild.roles.cache.values()]
+    .sort((a,b) => b.position - a.position)
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      position: r.position,
+      managed: r.managed,
+      hoist: r.hoist,
+      mentionable: r.mentionable,
+      members: r.members?.size ?? null,
+      permissions: r.permissions.toArray()
+    }));
+
+  const automod = await guild.autoModerationRules.fetch().catch(() => null);
+  let onboarding = null;
+  if (typeof guild.fetchOnboarding === 'function') {
+    onboarding = await guild.fetchOnboarding().catch(() => null);
+  }
+
+  const activeInvites = await guild.invites.fetch({ cache: false }).catch(() => null);
+  const summary = {
+    name: guild.name,
+    id: guild.id,
+    memberCount: guild.memberCount,
+    premiumTier: guild.premiumTier,
+    verificationLevel: guild.verificationLevel,
+    explicitContentFilter: guild.explicitContentFilter,
+    defaultMessageNotifications: guild.defaultMessageNotifications,
+    mfaLevel: guild.mfaLevel,
+    nsfwLevel: guild.nsfwLevel,
+    features: guild.features,
+    rulesChannel: guild.rulesChannel?.name || null,
+    publicUpdatesChannel: guild.publicUpdatesChannel?.name || null,
+    safetyAlertsChannel: guild.safetyAlertsChannel?.name || null,
+    systemChannel: guild.systemChannel?.name || null,
+    afkChannel: guild.afkChannel?.name || null,
+    channels: channels.length,
+    categories: channels.filter((c) => c.type === '4').length,
+    activeInvites: activeInvites?.size ?? null,
+    automodRules: automod ? [...automod.values()].map((r) => ({ name:r.name, enabled:r.enabled, eventType:r.eventType, triggerType:r.triggerType, actions:r.actions.map((a) => a.type) })) : null,
+    onboarding: onboarding ? {
+      enabled: onboarding.enabled,
+      mode: onboarding.mode,
+      defaultChannels: [...(onboarding.defaultChannels?.values?.() || [])].map((c) => c.name),
+      prompts: [...(onboarding.prompts?.values?.() || [])].map((p) => ({ title:p.title, singleSelect:p.singleSelect, required:p.required, inOnboarding:p.inOnboarding, options:p.options?.size ?? p.options?.length ?? null }))
+    } : null,
+    botPermissions: guild.members.me.permissions.toArray()
+  };
+
+  console.log('SERVER_AUDIT_SUMMARY ' + JSON.stringify(summary));
+  console.log('SERVER_AUDIT_CHANNELS ' + JSON.stringify(channels));
+  console.log('SERVER_AUDIT_ROLES ' + JSON.stringify(roles));
+}
+
 client.once('clientReady', async () => {
   guild = await client.guilds.fetch(guildId);
   await guild.channels.fetch();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
   if (!invitesChannel || !landingChannel) throw new Error('Could not find #invites and/or #join. Set their IDs in Render environment variables.');
+  await runOneTimeServerAudit();
   creatorRole = await resolveCreatorRole();
   if (!creatorRole) console.warn('NEW CREATOR role not resolved. Using screening + no-role fallback quality checks.');
   else console.log(`Quality role: ${creatorRole.name} (${creatorRole.id})`);
