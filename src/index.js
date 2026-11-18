@@ -203,6 +203,337 @@ async function sweepCreatorRanksOnce() {
   }
 }
 
+async function findChannel(id, name) {
+  if (id) return guild.channels.fetch(id).catch(() => null);
+  const q = norm(name);
+  return [...guild.channels.cache.values()].find((c) => c.isTextBased?.() && norm(c.name) === q) || null;
+}
+
+
+function desiredMemberCountName() {
+  return `Members: ${Number(guild?.memberCount || 0).toLocaleString('en-GB')}`;
+}
+
+async function updateMemberCountChannel(force = false) {
+  if (!memberCountChannel) return;
+  const wanted = desiredMemberCountName();
+  if (memberCountChannel.name === wanted) return;
+
+  const now = Date.now();
+  const remaining = cfg.memberCountMinUpdateMs - (now - lastMemberCountRenameAt);
+  if (!force && remaining > 0) {
+    if (!memberCountPendingTimer) {
+      memberCountPendingTimer = setTimeout(() => {
+        memberCountPendingTimer = null;
+        updateMemberCountChannel(true).catch((err) => console.error('MEMBER_COUNT_UPDATE_FAILED', err));
+      }, remaining);
+      memberCountPendingTimer.unref?.();
+    }
+    return;
+  }
+
+  if (!(await acquireLock('member-count-channel', 60))) return;
+  try {
+    const freshGuild = await client.guilds.fetch(guildId);
+    guild.memberCount = freshGuild.memberCount;
+    const exactName = desiredMemberCountName();
+    if (memberCountChannel.name !== exactName) {
+      memberCountChannel = await memberCountChannel.setName(exactName, 'Keep exact live server member count visible');
+      lastMemberCountRenameAt = Date.now();
+      console.log('MEMBER_COUNT_CHANNEL ' + exactName);
+    }
+  } finally {
+    await releaseLock('member-count-channel');
+  }
+}
+
+function queueMemberCountUpdate() {
+  updateMemberCountChannel(false).catch((err) => console.error('MEMBER_COUNT_UPDATE_FAILED', err));
+}
+
+async function resolveCreatorRole() {
+  await guild.roles.fetch();
+  if (cfg.roleId) return guild.roles.cache.get(cfg.roleId) || await guild.roles.fetch(cfg.roleId).catch(() => null);
+  const exact = [...guild.roles.cache.values()].filter((r) => !r.managed && norm(r.name) === norm(cfg.roleQuery));
+  if (exact.length === 1) return exact[0];
+  const wanted = norm(cfg.roleQuery).split(' ').filter(Boolean);
+  const fuzzy = [...guild.roles.cache.values()].filter((r) => {
+    if (r.managed) return false;
+    const name = norm(r.name);
+    return wanted.every((w) => name.includes(w));
+  });
+  return fuzzy.length === 1 ? fuzzy[0] : null;
+}
+
+function revokedCount(userId, wk = weekKey()) {
+  return Object.values(state.referrals).filter((r) => r.referrerId === userId && r.week === wk && r.status === 'revoked').length;
+}
+
+function cleanLeaderboardName(value) {
+  return String(value || '').replace(/[\r\n`*_~|>]/g, '').trim().slice(0, 40);
+}
+
+async function resolveLeaderboardName(userId) {
+  const member = await guild.members.fetch(userId).catch(() => null);
+  const user = member?.user || await client.users.fetch(userId).catch(() => null);
+  const liveName = cleanLeaderboardName(member?.displayName || user?.globalName || user?.username);
+  if (liveName) {
+    state.names[userId] = liveName;
+    save();
+    return liveName;
+  }
+  return cleanLeaderboardName(state.names[userId]) || ('Creator ' + String(userId).slice(-4));
+}
+
+function extractAuditCode(entry) {
+  const t = entry?.target;
+  if (typeof t?.code === 'string') return t.code;
+  if (typeof t?.id === 'string' && !/^\d{15,22}$/.test(t.id)) return t.id;
+  for (const c of entry?.changes || []) {
+    if (c?.key === 'code' && typeof (c.new ?? c.old) === 'string') return c.new ?? c.old;
+  }
+  return null;
+}
+
+async function recoverMappings(invites) {
+  if (!guild.members.me.permissions.has('ViewAuditLog')) return 0;
+  const active = new Set([...invites.keys()]);
+  let recovered = 0;
+  let before;
+  for (let page = 0; page < 5; page++) {
+    const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.InviteCreate, limit: 100, ...(before ? { before } : {}) }).catch(() => null);
+    if (!logs) break;
+    const entries = [...logs.entries.values()];
+    if (!entries.length) break;
+    for (const e of entries) {
+      const reason = String(e.reason || '');
+      const match = reason.match(/Academy referral link for .*\((\d{15,22})\)\s*$/);
+      if (!match) continue;
+      const code = extractAuditCode(e);
+      if (!code || !active.has(code) || state.links[code]) continue;
+      state.links[code] = { referrerId: match[1], createdAt: e.createdTimestamp || Date.now(), lastUses: 0 };
+      recovered++;
+    }
+    before = entries.at(-1)?.id;
+    if (entries.length < 100 || !before) break;
+  }
+  if (recovered) save();
+  return recovered;
+}
+
+async function leaderboardPayload() {
+  const wk = weekKey();
+  const rows = Object.entries(state.weeks[wk] || {}).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  const medals = ['🥇', '🥈', '🥉'];
+  const labels = ['1ST', '2ND', '3RD'];
+  const podium = (await Promise.all([0,1,2].map(async (i) => {
+    const row = rows[i];
+    if (!row) return `${medals[i]} **${labels[i]}**  →  **0 invites**`;
+    const [uid, count] = row;
+    const name = await resolveLeaderboardName(uid);
+    return `${medals[i]} **${labels[i]}**  **${name}**  ·  **${count} invite${count === 1 ? '' : 's'}**`;
+  }))).join('\n');
+
+  const c = new ContainerBuilder().setAccentColor(0x75FB4C);
+  const icon = guild.iconURL({ size: 128 });
+  if (icon) {
+    c.addSectionComponents(new SectionBuilder()
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent('# 💚 INVITE & EARN'),
+        new TextDisplayBuilder().setContent('Invite creators to the **Fanvue AI Creator Academy** and climb the live weekly leaderboard.')
+      )
+      .setThumbnailAccessory(new ThumbnailBuilder().setURL(icon).setDescription('Fanvue AI Creator Academy'))
+    );
+  } else {
+    c.addTextDisplayComponents(new TextDisplayBuilder().setContent('# 💚 INVITE & EARN\nInvite creators to the **Fanvue AI Creator Academy** and climb the live weekly leaderboard.'));
+  }
+  c.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
+  c.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`## 🏆 THIS WEEK\n${podium}`),
+    new TextDisplayBuilder().setContent('*Counts immediately · low-quality or departed referrals can be auto-revoked · resets Monday 00:00 UK*')
+  );
+  c.addSeparatorComponents(new SeparatorBuilder().setDivider(false).setSpacing(SeparatorSpacingSize.Small));
+  c.addActionRowComponents(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('ref:get').setLabel('GET MY INVITE LINK').setEmoji('🔗').setStyle(ButtonStyle.Success)
+  ));
+  c.addActionRowComponents(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('ref:stats').setLabel('MY STATS').setEmoji('📊').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('ref:rewards').setLabel('REWARDS').setEmoji('🎁').setStyle(ButtonStyle.Secondary)
+  ));
+  return { flags: MessageFlags.IsComponentsV2, components: [c], allowedMentions: { parse: [] } };
+}
+
+async function findLeaderboardMessage() {
+  if (state.messageId) {
+    const m = await invitesChannel.messages.fetch(state.messageId).catch(() => null);
+    if (m) return m;
+  }
+  const recent = await invitesChannel.messages.fetch({ limit: 100 });
+  const candidates = [...recent.values()].filter((m) => m.author.id === client.user.id);
+  const found = candidates.find((m) => JSON.stringify(m.components).includes('INVITE & EARN')) || null;
+  if (found) { state.messageId = found.id; save(); }
+  return found;
+}
+
+async function updateLeaderboard(force = false) {
+  const wk = weekKey();
+  let m = await findLeaderboardMessage();
+  if (!m) {
+    m = await invitesChannel.send(await leaderboardPayload());
+    state.messageId = m.id;
+    save();
+    return;
+  }
+  if (force || state.lastWeek !== wk) await m.edit(await leaderboardPayload());
+  state.lastWeek = wk;
+  save();
+}
+
+
+async function consumeInviteDelta(member) {
+  const invites = await guild.invites.fetch({ cache: false });
+  await recoverMappings(invites);
+  const candidates = [];
+  for (const invite of invites.values()) {
+    const link = state.links[invite.code];
+    if (!link) continue;
+    const uses = Number(invite.uses || 0);
+    const prev = Number(link.lastUses || 0);
+    const delta = uses - prev;
+    if (delta > 0) candidates.push({ invite, link, delta });
+  }
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.delta - a.delta || a.invite.code.localeCompare(b.invite.code));
+  const chosen = candidates[0];
+  chosen.link.lastUses = Number(chosen.link.lastUses || 0) + 1;
+  await save();
+  if (candidates.length > 1) console.warn(`Invite attribution ambiguous for ${member.id}; chose ${chosen.invite.code}`);
+  return { code: chosen.invite.code, referrerId: chosen.link.referrerId };
+}
+
+async function processJoin(member) {
+  if (member.guild.id !== guildId) return;
+  if (!(await acquireLock(`join:${member.id}`, 120))) return;
+  await loadSharedState();
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  const used = await consumeInviteDelta(member);
+  if (!used) return;
+
+  if (member.user.bot) {
+    console.log(`Ignored bot referral ${member.id}`);
+    return;
+  }
+  if (state.referrals[member.id]) {
+    console.log(`Ignored repeat/rejoin referral ${member.id}`);
+    return;
+  }
+
+  const wk = weekKey(new Date(member.joinedTimestamp || Date.now()));
+  state.referrals[member.id] = {
+    memberId: member.id,
+    referrerId: used.referrerId,
+    code: used.code,
+    joinedAt: member.joinedTimestamp || Date.now(),
+    accountCreatedAt: member.user.createdTimestamp || 0,
+    week: wk,
+    status: 'counted',
+    reason: null,
+  };
+  await save();
+  await syncInviteCounters();
+  console.log(`COUNTED ${member.id} -> ${used.referrerId}`);
+}
+
+async function revokeReferral(memberId, reason) {
+  const r = state.referrals[memberId];
+  if (!r || r.status !== 'counted') return false;
+  r.status = 'revoked';
+  r.reason = reason;
+  r.revokedAt = Date.now();
+  await save();
+  await syncInviteCounters();
+  console.log(`REVOKED ${memberId} -> ${r.referrerId}: ${reason}`);
+  return true;
+}
+
+async function qualitySweep() {
+  const now = Date.now();
+  for (const r of Object.values(state.referrals)) {
+    if (r.status !== 'counted') continue;
+    const member = await guild.members.fetch(r.memberId).catch(() => null);
+    if (!member) {
+      await revokeReferral(r.memberId, 'left server');
+      continue;
+    }
+    const ageMs = now - Number(r.joinedAt || now);
+    if (ageMs >= 24 * 3600000 && member.pending === true) {
+      await revokeReferral(r.memberId, 'still pending server screening after 24h');
+      continue;
+    }
+    if (ageMs >= cfg.creatorRoleGraceHours * 3600000) {
+      const hasMeaningfulRole = member.roles.cache.some((role) => role.id !== guild.id && !role.managed);
+      if (!hasMeaningfulRole) {
+        await revokeReferral(r.memberId, `no qualifying server role after ${cfg.creatorRoleGraceHours}h`);
+      }
+    }
+  }
+}
+
+async function syncInviteCounters({ bootstrap = false } = {}) {
+  if (syncing) return;
+  if (!(await acquireLock('invite-sync', 30))) return;
+  syncing = true;
+  try {
+    await loadSharedState();
+    const invites = await guild.invites.fetch({ cache: false });
+    if (bootstrap || Object.keys(state.links).length === 0) await recoverMappings(invites);
+
+    const before = JSON.stringify(state.weeks[weekKey()] || {});
+    await rebuildWeeklyCountsFromDiscord(invites);
+    const after = JSON.stringify(state.weeks[weekKey()] || {});
+    state.lastWeek = weekKey();
+    await save();
+
+    if (bootstrap || before !== after) {
+      console.log('LIVE_WEEK_COUNTS ' + JSON.stringify(state.weeks[weekKey()] || {}));
+      await updateLeaderboard(true);
+    }
+  } finally {
+    syncing = false;
+    await releaseLock('invite-sync');
+  }
+}
+
+async function getOrCreateLink(user) {
+  const displayName = cleanLeaderboardName(user.globalName || user.username);
+  if (displayName) {
+    state.names[user.id] = displayName;
+    save();
+  }
+  const invites = await guild.invites.fetch({ cache: false });
+  for (const [code, link] of Object.entries(state.links)) {
+    if (link.referrerId !== user.id) continue;
+    const i = invites.get(code);
+    if (i) return i.url;
+  }
+  const i = await landingChannel.createInvite({ maxAge: 604800, maxUses: 50, unique: true, reason: `Academy referral link for ${user.username} (${user.id})` });
+  state.links[i.code] = { referrerId: user.id, createdAt: Date.now(), lastUses: Number(i.uses || 0) };
+  save();
+  return i.url;
+}
+
+
+async function removeFiveMinuteTypingRequirement() {
+  if (guild.verificationLevel === 2) {
+    await guild.setVerificationLevel(1, 'Remove 5-minute account-age typing requirement; retain verified-email requirement');
+    console.log('VERIFICATION_LEVEL_CHANGED 2 -> 1');
+  } else {
+    console.log('VERIFICATION_LEVEL_ALREADY ' + guild.verificationLevel);
+  }
+}
+
+
+
 
 
 client.once('clientReady', async () => {
