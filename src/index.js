@@ -284,8 +284,19 @@ async function qualitySweep() {
       await revokeReferral(r.memberId, 'left server');
       continue;
     }
-    if (creatorRole && now - Number(r.joinedAt || now) >= cfg.creatorRoleGraceHours * 3600000 && !member.roles.cache.has(creatorRole.id)) {
-      await revokeReferral(r.memberId, `no NEW CREATOR role after ${cfg.creatorRoleGraceHours}h`);
+    const ageMs = now - Number(r.joinedAt || now);
+    if (ageMs >= 24 * 3600000 && member.pending === true) {
+      await revokeReferral(r.memberId, 'still pending server screening after 24h');
+      continue;
+    }
+    if (ageMs >= cfg.creatorRoleGraceHours * 3600000) {
+      if (creatorRole && !member.roles.cache.has(creatorRole.id)) {
+        await revokeReferral(r.memberId, `no NEW CREATOR role after ${cfg.creatorRoleGraceHours}h`);
+        continue;
+      }
+      if (!creatorRole && member.roles.cache.size <= 1) {
+        await revokeReferral(r.memberId, `no server roles after ${cfg.creatorRoleGraceHours}h`);
+      }
     }
   }
 }
@@ -344,7 +355,7 @@ client.once('clientReady', async () => {
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
   if (!invitesChannel || !landingChannel) throw new Error('Could not find #invites and/or #join. Set their IDs in Render environment variables.');
   creatorRole = await resolveCreatorRole();
-  if (!creatorRole) console.warn('NEW CREATOR role not resolved. 48h role-based quality revocation is disabled until it is found.');
+  if (!creatorRole) console.warn('NEW CREATOR role not resolved. Using screening + no-role fallback quality checks.');
   else console.log(`Quality role: ${creatorRole.name} (${creatorRole.id})`);
 
   await syncInviteCounters({ bootstrap: true });
