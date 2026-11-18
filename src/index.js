@@ -486,30 +486,11 @@ async function removeFiveMinuteTypingRequirement() {
 }
 
 
-async function auditMemberCountRenames() {
-  const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.ChannelUpdate, limit: 50 }).catch(() => null);
-  if (!logs) return;
-  for (const e of logs.entries.values()) {
-    if (String(e.target?.id || '') !== cfg.memberCountChannelId) continue;
-    const nameChange = (e.changes || []).find((c) => c.key === 'name');
-    if (!nameChange) continue;
-    console.log('MEMBER_COUNT_AUDIT ' + JSON.stringify({
-      executorId: e.executor?.id || null,
-      executorTag: e.executor?.tag || e.executor?.username || null,
-      oldName: nameChange.old ?? null,
-      newName: nameChange.new ?? null,
-      reason: e.reason || null,
-      at: new Date(e.createdTimestamp).toISOString()
-    }));
-  }
-}
-
 client.once('clientReady', async () => {
   guild = await client.guilds.fetch(guildId);
   await loadSharedState();
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
-  await auditMemberCountRenames();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
   memberCountChannel = await guild.channels.fetch(cfg.memberCountChannelId).catch(() => null);
