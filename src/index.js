@@ -153,6 +153,58 @@ let memberCountPendingTimer = null;
 let lastMemberCountRenameAt = 0;
 let joinQueue = Promise.resolve();
 
+const CREATOR_RANK_IDS = [
+  '1539309205364805662', // Elite Creator
+  '1431000324864348210', // Legendary Creator
+  '1430998390690414592', // Diamond Creator
+  '1430998282510929930', // Gold Creator
+  '1430998244233838763', // Silver Creator
+  '1430978118717538346', // New Creator
+];
+
+let creatorRankSweepRunning = false;
+
+async function normalizeCreatorRanks(member, reason = 'Keep only highest creator rank') {
+  if (!member || member.user?.bot) return false;
+  const held = CREATOR_RANK_IDS.filter((id) => member.roles.cache.has(id));
+  if (held.length <= 1) return false;
+
+  // CREATOR_RANK_IDS is ordered highest -> lowest.
+  const keep = held[0];
+  const remove = held.slice(1);
+  if (!remove.length) return false;
+
+  await member.roles.remove(remove, reason);
+  console.log('CREATOR_RANK_NORMALIZED ' + JSON.stringify({
+    memberId: member.id,
+    kept: keep,
+    removed: remove
+  }));
+  return true;
+}
+
+async function sweepCreatorRanksOnce() {
+  if (creatorRankSweepRunning) return;
+  creatorRankSweepRunning = true;
+  try {
+    const members = await guild.members.fetch();
+    let fixed = 0;
+    for (const member of members.values()) {
+      try {
+        if (await normalizeCreatorRanks(member, 'Initial creator rank cleanup: keep highest only')) fixed++;
+      } catch (err) {
+        console.error('CREATOR_RANK_NORMALIZE_FAILED', member.id, err);
+      }
+    }
+    console.log('CREATOR_RANK_SWEEP_COMPLETE ' + JSON.stringify({ scanned: members.size, fixed }));
+  } catch (err) {
+    console.error('CREATOR_RANK_SWEEP_FAILED', err);
+  } finally {
+    creatorRankSweepRunning = false;
+  }
+}
+
+
 async function findChannel(id, name) {
   if (id) return guild.channels.fetch(id).catch(() => null);
   const q = norm(name);
@@ -487,27 +539,8 @@ async function removeFiveMinuteTypingRequirement() {
 
 
 
-async function logRoleHierarchyOnce() {
-  await guild.roles.fetch();
-  const roles = [...guild.roles.cache.values()]
-    .filter((r) => r.id !== guild.id)
-    .sort((a,b) => b.position - a.position)
-    .map((r) => ({
-      id: r.id,
-      name: r.name,
-      position: r.position,
-      managed: r.managed,
-      hoist: r.hoist,
-      mentionable: r.mentionable,
-      members: r.members?.size ?? null,
-      perms: r.permissions.toArray()
-    }));
-  console.log('ROLE_HIERARCHY ' + JSON.stringify(roles));
-}
-
 client.once('clientReady', async () => {
   guild = await client.guilds.fetch(guildId);
-  await logRoleHierarchyOnce();
   await loadSharedState();
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
@@ -549,6 +582,7 @@ client.once('clientReady', async () => {
   memberCountTimer = setInterval(() => updateMemberCountChannel(false).catch(console.error), 300000);
   memberCountTimer.unref();
   console.log(`READY ${client.user.tag} · ${guild.name} · live sync ${cfg.pollMs/1000}s · quality sweep ${cfg.qualitySweepMs/60000}m · exact member count enabled`);
+  setTimeout(() => sweepCreatorRanksOnce().catch(console.error), 5000).unref?.();
 });
 
 client.on('guildMemberAdd', (member) => {
@@ -561,6 +595,15 @@ client.on('guildMemberRemove', (member) => {
   if (member.guild.id !== guildId) return;
   queueMemberCountUpdate();
   revokeReferral(member.id, 'left server').catch(console.error);
+});
+
+
+client.on('guildMemberUpdate', (oldMember, newMember) => {
+  if (newMember.guild.id !== guildId) return;
+  const before = CREATOR_RANK_IDS.filter((id) => oldMember.roles.cache.has(id)).join(',');
+  const after = CREATOR_RANK_IDS.filter((id) => newMember.roles.cache.has(id)).join(',');
+  if (before === after || after.split(',').filter(Boolean).length <= 1) return;
+  normalizeCreatorRanks(newMember).catch((err) => console.error('CREATOR_RANK_NORMALIZE_FAILED', newMember.id, err));
 });
 
 client.on('interactionCreate', async (i) => {
