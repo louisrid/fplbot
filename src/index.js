@@ -155,12 +155,8 @@ let lastMemberCountRenameAt = 0;
 let joinQueue = Promise.resolve();
 
 
-const PRIMARY_ROLE_IDS = [
-  '1539578951364775956', // Fanvue Rep
-  '1427337798129680523', // Staff (admin)
-  '1427337798129680522', // Staff
-  '1447969609176318042', // Mod
-  '1534133542647500861', // Creator Success
+
+const CREATOR_RANK_IDS = [
   '1539309205364805662', // Elite Creator
   '1431000324864348210', // Legendary Creator
   '1430998390690414592', // Diamond Creator
@@ -169,126 +165,56 @@ const PRIMARY_ROLE_IDS = [
   '1430978118717538346', // New Creator
 ];
 
-let primaryRoleSweepRunning = false;
+let creatorRankSweepRunning = false;
 
-function orderedPrimaryRoles() {
-  return PRIMARY_ROLE_IDS
-    .map((id) => guild.roles.cache.get(id))
-    .filter(Boolean)
-    .sort((a, b) => b.position - a.position);
+function memberCreatorRankIds(member) {
+  return CREATOR_RANK_IDS.filter((id) => member.roles.cache.has(id));
 }
 
-function memberPrimaryRoleIds(member) {
-  const order = orderedPrimaryRoles();
-  return order.filter((role) => member.roles.cache.has(role.id)).map((role) => role.id);
-}
-
-async function ensurePrimaryRoleInheritance() {
-  await guild.roles.fetch();
-  await guild.channels.fetch();
-
-  const roles = orderedPrimaryRoles();
-  if (!roles.length) {
-    console.warn('PRIMARY_ROLE_INHERITANCE skipped: no primary roles resolved');
-    return;
-  }
-
-  // Every editable higher role inherits guild-level permissions from lower primary roles.
-  for (let i = 0; i < roles.length; i++) {
-    let merged = 0n;
-    for (const lower of roles.slice(i)) merged |= lower.permissions.bitfield;
-    if (roles[i].permissions.bitfield !== merged && roles[i].editable) {
-      await roles[i].setPermissions(merged, 'Primary role hierarchy: inherit lower-role permissions');
-      console.log('PRIMARY_ROLE_PERMS_INHERITED ' + roles[i].id);
-    }
-  }
-
-  // Every higher role inherits explicit channel ALLOW access from lower primary roles.
-  // Existing higher-role denies are preserved.
-  let edited = 0;
-  for (const channel of guild.channels.cache.values()) {
-    if (!channel.permissionOverwrites?.cache) continue;
-
-    for (let i = 0; i < roles.length; i++) {
-      let allowBits = 0n;
-      for (const lower of roles.slice(i)) {
-        const ow = channel.permissionOverwrites.cache.get(lower.id);
-        if (ow) allowBits |= ow.allow.bitfield;
-      }
-      if (allowBits === 0n) continue;
-
-      const existing = channel.permissionOverwrites.cache.get(roles[i].id);
-      const existingAllow = existing?.allow?.bitfield || 0n;
-      const mergedAllow = existingAllow | allowBits;
-      if (mergedAllow === existingAllow) continue;
-
-      const patch = {};
-      for (const perm of new PermissionsBitField(mergedAllow).toArray()) patch[perm] = true;
-      for (const perm of existing?.deny?.toArray?.() || []) patch[perm] = false;
-
-      await channel.permissionOverwrites.edit(
-        roles[i],
-        patch,
-        { reason: 'Primary role hierarchy: inherit lower-role channel access' }
-      );
-      edited++;
-    }
-  }
-
-  console.log('PRIMARY_ROLE_INHERITANCE_COMPLETE ' + JSON.stringify({
-    primaryRoles: roles.map((r) => ({ id: r.id, name: r.name, position: r.position })),
-    channelOverwritesEdited: edited
-  }));
-}
-
-async function normalizePrimaryRoles(member, reason = 'Keep only highest primary role') {
+async function normalizeCreatorRanks(member, reason = 'Keep only highest creator rank') {
   if (!member || member.user?.bot) return false;
-
-  const held = memberPrimaryRoleIds(member);
+  const held = memberCreatorRankIds(member);
   if (held.length <= 1) return false;
-
-  const keep = held[0];
-  const remove = held.slice(1).filter((id) => {
-    const role = guild.roles.cache.get(id);
-    return role?.editable !== false;
-  });
+  const remove = held.slice(1).filter((id) => guild.roles.cache.get(id)?.editable !== false);
   if (!remove.length) return false;
-
   await member.roles.remove(remove, reason);
-  console.log('PRIMARY_ROLE_NORMALIZED ' + JSON.stringify({
-    memberId: member.id,
-    kept: keep,
-    removed: remove
-  }));
+  console.log('CREATOR_RANK_NORMALIZED ' + JSON.stringify({ memberId: member.id, kept: held[0], removed: remove }));
   return true;
 }
 
-async function sweepPrimaryRolesOnce() {
-  if (primaryRoleSweepRunning) return;
-  primaryRoleSweepRunning = true;
+async function sweepCreatorRanksOnce() {
+  if (creatorRankSweepRunning) return;
+  creatorRankSweepRunning = true;
   try {
     const members = await guild.members.fetch();
     let fixed = 0;
     let failed = 0;
-
     for (const member of members.values()) {
       try {
-        if (await normalizePrimaryRoles(member, 'Initial primary-role cleanup: keep highest only')) fixed++;
+        if (await normalizeCreatorRanks(member, 'Creator rank cleanup: keep highest creator rank only')) fixed++;
       } catch (err) {
         failed++;
-        console.error('PRIMARY_ROLE_NORMALIZE_FAILED', member.id, err);
+        console.error('CREATOR_RANK_NORMALIZE_FAILED', member.id, err);
       }
     }
-
-    console.log('PRIMARY_ROLE_SWEEP_COMPLETE ' + JSON.stringify({
-      scanned: members.size,
-      fixed,
-      failed
-    }));
-  } catch (err) {
-    console.error('PRIMARY_ROLE_SWEEP_FAILED', err);
+    console.log('CREATOR_RANK_SWEEP_COMPLETE ' + JSON.stringify({ scanned: members.size, fixed, failed }));
   } finally {
-    primaryRoleSweepRunning = false;
+    creatorRankSweepRunning = false;
+  }
+}
+
+async function restoreRdlndAdminOnce() {
+  const member = await guild.members.fetch('969690605695426570').catch(() => null);
+  const adminRole = guild.roles.cache.get('1427337798129680523') || await guild.roles.fetch('1427337798129680523').catch(() => null);
+  if (!member || !adminRole) {
+    console.warn('RDLND_ADMIN_RESTORE skipped');
+    return;
+  }
+  if (!member.roles.cache.has(adminRole.id)) {
+    await member.roles.add(adminRole, 'Restore Admin role removed by role-cleanup automation');
+    console.log('RDLND_ADMIN_RESTORED ' + adminRole.id);
+  } else {
+    console.log('RDLND_ADMIN_ALREADY_PRESENT ' + adminRole.id);
   }
 }
 
@@ -561,8 +487,8 @@ async function qualitySweep() {
       continue;
     }
     if (ageMs >= cfg.creatorRoleGraceHours * 3600000) {
-      const hasPrimaryRole = memberPrimaryRoleIds(member).length > 0;
-      if (!hasPrimaryRole) {
+      const hasMeaningfulRole = member.roles.cache.some((role) => role.id !== guild.id && !role.managed);
+      if (!hasMeaningfulRole) {
         await revokeReferral(r.memberId, `no qualifying server role after ${cfg.creatorRoleGraceHours}h`);
       }
     }
@@ -631,6 +557,8 @@ client.once('clientReady', async () => {
   await loadSharedState();
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
+  await guild.roles.fetch();
+  await restoreRdlndAdminOnce();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
   memberCountChannel = await guild.channels.fetch(cfg.memberCountChannelId).catch(() => null);
@@ -668,9 +596,8 @@ client.once('clientReady', async () => {
   qualityTimer.unref();
   memberCountTimer = setInterval(() => updateMemberCountChannel(false).catch(console.error), 300000);
   memberCountTimer.unref();
-  await ensurePrimaryRoleInheritance();
   console.log(`READY ${client.user.tag} · ${guild.name} · live sync ${cfg.pollMs/1000}s · quality sweep ${cfg.qualitySweepMs/60000}m · exact member count enabled`);
-  setTimeout(() => sweepPrimaryRolesOnce().catch(console.error), 5000).unref?.();
+  setTimeout(() => sweepCreatorRanksOnce().catch(console.error), 5000).unref?.();
 });
 
 client.on('guildMemberAdd', (member) => {
@@ -688,10 +615,10 @@ client.on('guildMemberRemove', (member) => {
 
 client.on('guildMemberUpdate', (oldMember, newMember) => {
   if (newMember.guild.id !== guildId) return;
-  const before = memberPrimaryRoleIds(oldMember).join(',');
-  const after = memberPrimaryRoleIds(newMember).join(',');
-  if (before === after || memberPrimaryRoleIds(newMember).length <= 1) return;
-  normalizePrimaryRoles(newMember).catch((err) => console.error('PRIMARY_ROLE_NORMALIZE_FAILED', newMember.id, err));
+  const before = memberCreatorRankIds(oldMember).join(',');
+  const after = memberCreatorRankIds(newMember).join(',');
+  if (before === after || memberCreatorRankIds(newMember).length <= 1) return;
+  normalizeCreatorRanks(newMember).catch((err) => console.error('CREATOR_RANK_NORMALIZE_FAILED', newMember.id, err));
 });
 
 client.on('interactionCreate', async (i) => {
@@ -701,7 +628,14 @@ client.on('interactionCreate', async (i) => {
   try {
     if (cfg.roleId) {
       const member = await guild.members.fetch(i.user.id).catch(() => null);
-      const eligible = member && memberPrimaryRoleIds(member).length > 0;
+      const eligibleRoleIds = new Set([
+        ...CREATOR_RANK_IDS,
+        '1539578951364775956',
+        '1427337798129680523',
+        '1447969609176318042',
+        '1534133542647500861'
+      ]);
+      const eligible = member && member.roles.cache.some((role) => eligibleRoleIds.has(role.id));
       if (!eligible) {
         await i.reply({ content: 'This invite programme is available to Academy creators.', ephemeral: true });
         return;
