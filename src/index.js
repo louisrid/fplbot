@@ -419,9 +419,48 @@ async function runOneTimeServerAudit() {
   console.log('SERVER_AUDIT_ROLES ' + JSON.stringify(roles));
 }
 
+
+async function removeLegacyFreeCoursePost() {
+  const channel = await guild.channels.fetch('1538918064773537874').catch(() => null);
+  if (!channel?.isTextBased?.()) return;
+  let before;
+  for (let page = 0; page < 10; page++) {
+    const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) }).catch(() => null);
+    if (!batch || batch.size === 0) break;
+    for (const message of batch.values()) {
+      const titles = message.embeds.map((e) => e.title || '').join(' | ');
+      const body = [message.content, ...message.embeds.map((e) => e.description || '')].join('\n');
+      const legacy =
+        titles.includes('Fanvue AI Creator Academy — Free Course Link') ||
+        titles.includes('Fanvue AI Creator Academy - Free Course Link') ||
+        body.includes('The Fanvue AI Creator Course shows you how to create, grow, and monetise an AI Creator');
+      if (legacy) {
+        await message.delete().catch((err) => console.error('LEGACY_FREE_COURSE_DELETE_FAILED', message.id, err));
+        console.log('LEGACY_FREE_COURSE_DELETED ' + message.id);
+        return;
+      }
+    }
+    const oldest = batch.last();
+    if (!oldest || batch.size < 100) break;
+    before = oldest.id;
+  }
+  console.log('LEGACY_FREE_COURSE_NOT_FOUND');
+}
+
+async function removeFiveMinuteTypingRequirement() {
+  if (guild.verificationLevel === 2) {
+    await guild.setVerificationLevel(1, 'Remove 5-minute account-age typing requirement; retain verified-email requirement');
+    console.log('VERIFICATION_LEVEL_CHANGED 2 -> 1');
+  } else {
+    console.log('VERIFICATION_LEVEL_ALREADY ' + guild.verificationLevel);
+  }
+}
+
 client.once('clientReady', async () => {
   guild = await client.guilds.fetch(guildId);
+  await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
+  await removeLegacyFreeCoursePost();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
   if (!invitesChannel || !landingChannel) throw new Error('Could not find #invites and/or #join. Set their IDs in Render environment variables.');
