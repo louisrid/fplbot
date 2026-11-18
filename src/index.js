@@ -23,6 +23,10 @@ if (!token || !guildId) throw new Error('DISCORD_TOKEN and GUILD_ID are required
 
 const cfg = {
   roleId: process.env.NEW_CREATOR_ROLE_ID?.trim() || '',
+  roleQuery: process.env.NEW_CREATOR_ROLE_QUERY || 'NEW CREATOR',
+  qualitySweepMs: Math.max(60000, Number(process.env.QUALITY_SWEEP_MS || 300000)),
+  minAccountAgeHours: Math.max(0, Number(process.env.MIN_ACCOUNT_AGE_HOURS || 24)),
+  creatorRoleGraceHours: Math.max(1, Number(process.env.CREATOR_ROLE_GRACE_HOURS || 48)),
   invitesChannelId: process.env.INVITES_CHANNEL_ID?.trim() || '',
   invitesChannelName: process.env.INVITES_CHANNEL_NAME || '🎁｜invites',
   landingChannelId: process.env.LANDING_CHANNEL_ID?.trim() || '',
@@ -35,9 +39,12 @@ const cfg = {
 
 fs.mkdirSync(cfg.dataDir, { recursive: true });
 const statePath = path.join(cfg.dataDir, 'state.json');
-const blankState = () => ({ links: {}, weeks: {}, messageId: null, lastWeek: null });
+const blankState = () => ({ links: {}, weeks: {}, referrals: {}, messageId: null, lastWeek: null });
 let state = blankState();
 try { state = { ...blankState(), ...JSON.parse(fs.readFileSync(statePath, 'utf8')) }; } catch {}
+state.links ||= {};
+state.weeks ||= {};
+state.referrals ||= {};
 const save = () => {
   const tmp = `${statePath}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
@@ -63,14 +70,34 @@ function addCount(userId, n, wk = weekKey()) {
 }
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites] });
-let guild, invitesChannel, landingChannel;
+let guild, invitesChannel, landingChannel, creatorRole;
 let syncing = false;
 let refreshTimer = null;
+let qualityTimer = null;
+let joinQueue = Promise.resolve();
 
 async function findChannel(id, name) {
   if (id) return guild.channels.fetch(id).catch(() => null);
   const q = norm(name);
   return [...guild.channels.cache.values()].find((c) => c.isTextBased?.() && norm(c.name) === q) || null;
+}
+
+async function resolveCreatorRole() {
+  await guild.roles.fetch();
+  if (cfg.roleId) return guild.roles.cache.get(cfg.roleId) || await guild.roles.fetch(cfg.roleId).catch(() => null);
+  const exact = [...guild.roles.cache.values()].filter((r) => !r.managed && norm(r.name) === norm(cfg.roleQuery));
+  if (exact.length === 1) return exact[0];
+  const wanted = norm(cfg.roleQuery).split(' ').filter(Boolean);
+  const fuzzy = [...guild.roles.cache.values()].filter((r) => {
+    if (r.managed) return false;
+    const name = norm(r.name);
+    return wanted.every((w) => name.includes(w));
+  });
+  return fuzzy.length === 1 ? fuzzy[0] : null;
+}
+
+function revokedCount(userId, wk = weekKey()) {
+  return Object.values(state.referrals).filter((r) => r.referrerId === userId && r.week === wk && r.status === 'revoked').length;
 }
 
 function extractAuditCode(entry) {
@@ -137,7 +164,7 @@ function leaderboardPayload() {
   c.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
   c.addTextDisplayComponents(
     new TextDisplayBuilder().setContent(`## 🏆 THIS WEEK\n${podium}`),
-    new TextDisplayBuilder().setContent('*Live invite counter · resets every Monday at 00:00 UK*')
+    new TextDisplayBuilder().setContent('*Counts immediately · low-quality or departed referrals can be auto-revoked · resets Monday 00:00 UK*')
   );
   c.addSeparatorComponents(new SeparatorBuilder().setDivider(false).setSpacing(SeparatorSpacingSize.Small));
   c.addActionRowComponents(new ActionRowBuilder().addComponents(
@@ -174,6 +201,93 @@ async function updateLeaderboard(force = false) {
   if (force || state.lastWeek !== wk) await m.edit(leaderboardPayload());
   state.lastWeek = wk;
   save();
+}
+
+
+async function consumeInviteDelta(member) {
+  const invites = await guild.invites.fetch({ cache: false });
+  await recoverMappings(invites);
+  const candidates = [];
+  for (const invite of invites.values()) {
+    const link = state.links[invite.code];
+    if (!link) continue;
+    const uses = Number(invite.uses || 0);
+    const prev = Number(link.lastUses || 0);
+    const delta = uses - prev;
+    if (delta > 0) candidates.push({ invite, link, delta });
+  }
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.delta - a.delta || a.invite.code.localeCompare(b.invite.code));
+  const chosen = candidates[0];
+  chosen.link.lastUses = Number(chosen.link.lastUses || 0) + 1;
+  save();
+  if (candidates.length > 1) console.warn(`Invite attribution ambiguous for ${member.id}; chose ${chosen.invite.code}`);
+  return { code: chosen.invite.code, referrerId: chosen.link.referrerId };
+}
+
+async function processJoin(member) {
+  if (member.guild.id !== guildId) return;
+  await new Promise((resolve) => setTimeout(resolve, 1400));
+  const used = await consumeInviteDelta(member);
+  if (!used) return;
+
+  if (member.user.bot) {
+    console.log(`Ignored bot referral ${member.id}`);
+    return;
+  }
+  if (state.referrals[member.id]) {
+    console.log(`Ignored repeat/rejoin referral ${member.id}`);
+    return;
+  }
+
+  const wk = weekKey(new Date(member.joinedTimestamp || Date.now()));
+  state.referrals[member.id] = {
+    memberId: member.id,
+    referrerId: used.referrerId,
+    code: used.code,
+    joinedAt: member.joinedTimestamp || Date.now(),
+    accountCreatedAt: member.user.createdTimestamp || 0,
+    week: wk,
+    status: 'counted',
+    reason: null,
+  };
+  addCount(used.referrerId, 1, wk);
+  save();
+  await updateLeaderboard(true);
+  console.log(`COUNTED ${member.id} -> ${used.referrerId}`);
+}
+
+async function revokeReferral(memberId, reason) {
+  const r = state.referrals[memberId];
+  if (!r || r.status !== 'counted') return false;
+  r.status = 'revoked';
+  r.reason = reason;
+  r.revokedAt = Date.now();
+  addCount(r.referrerId, -1, r.week);
+  save();
+  await updateLeaderboard(true);
+  console.log(`REVOKED ${memberId} -> ${r.referrerId}: ${reason}`);
+  return true;
+}
+
+async function qualitySweep() {
+  const now = Date.now();
+  for (const r of Object.values(state.referrals)) {
+    if (r.status !== 'counted') continue;
+    const accountAgeAtJoin = Number(r.joinedAt || 0) - Number(r.accountCreatedAt || 0);
+    if (r.accountCreatedAt && accountAgeAtJoin < cfg.minAccountAgeHours * 3600000) {
+      await revokeReferral(r.memberId, `account younger than ${cfg.minAccountAgeHours}h at join`);
+      continue;
+    }
+    const member = await guild.members.fetch(r.memberId).catch(() => null);
+    if (!member) {
+      await revokeReferral(r.memberId, 'left server');
+      continue;
+    }
+    if (creatorRole && now - Number(r.joinedAt || now) >= cfg.creatorRoleGraceHours * 3600000 && !member.roles.cache.has(creatorRole.id)) {
+      await revokeReferral(r.memberId, `no NEW CREATOR role after ${cfg.creatorRoleGraceHours}h`);
+    }
+  }
 }
 
 async function syncInviteCounters({ bootstrap = false } = {}) {
@@ -229,16 +343,29 @@ client.once('clientReady', async () => {
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
   if (!invitesChannel || !landingChannel) throw new Error('Could not find #invites and/or #join. Set their IDs in Render environment variables.');
+  creatorRole = await resolveCreatorRole();
+  if (!creatorRole) console.warn('NEW CREATOR role not resolved. 48h role-based quality revocation is disabled until it is found.');
+  else console.log(`Quality role: ${creatorRole.name} (${creatorRole.id})`);
+
   await syncInviteCounters({ bootstrap: true });
   await updateLeaderboard(true);
+  await qualitySweep();
+
   refreshTimer = setInterval(() => syncInviteCounters().catch(console.error), cfg.pollMs);
   refreshTimer.unref();
-  console.log(`READY ${client.user.tag} · ${guild.name} · live sync every ${cfg.pollMs/1000}s`);
+  qualityTimer = setInterval(() => qualitySweep().catch(console.error), cfg.qualitySweepMs);
+  qualityTimer.unref();
+  console.log(`READY ${client.user.tag} · ${guild.name} · live sync ${cfg.pollMs/1000}s · quality sweep ${cfg.qualitySweepMs/60000}m`);
 });
 
 client.on('guildMemberAdd', (member) => {
   if (member.guild.id !== guildId) return;
-  setTimeout(() => syncInviteCounters().catch(console.error), 1500);
+  joinQueue = joinQueue.then(() => processJoin(member)).catch(console.error);
+});
+
+client.on('guildMemberRemove', (member) => {
+  if (member.guild.id !== guildId) return;
+  revokeReferral(member.id, 'left server').catch(console.error);
 });
 
 client.on('interactionCreate', async (i) => {
@@ -258,11 +385,12 @@ client.on('interactionCreate', async (i) => {
     if (i.customId === 'ref:stats') {
       await syncInviteCounters();
       const n = weekCount(i.user.id);
-      await i.reply({ content: `📊 **Your stats**\nThis week: **${n} invite${n === 1 ? '' : 's'}**\nLeaderboard resets Monday at 00:00 UK.`, ephemeral: true });
+      const revoked = revokedCount(i.user.id);
+      await i.reply({ content: `📊 **Your stats**\nThis week: **${n} invite${n === 1 ? '' : 's'}**\nAuto-revoked this week: **${revoked}**\nResets Monday at 00:00 UK.`, ephemeral: true });
       return;
     }
     if (i.customId === 'ref:rewards') {
-      await i.reply({ content: '🎁 **Rewards coming soon.**\nYour live weekly invites are already being tracked.', ephemeral: true });
+      await i.reply({ content: '🎁 **Rewards coming soon.**\nInvites count immediately, with low-quality referrals automatically removable.', ephemeral: true });
     }
   } catch (err) {
     console.error(err);
@@ -272,7 +400,7 @@ client.on('interactionCreate', async (i) => {
 });
 
 http.createServer((req, res) => {
-  if (req.url === '/healthz') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true, discord: client.isReady() })); return; }
+  if (req.url === '/healthz') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true, discord: client.isReady(), role: creatorRole?.id || null })); return; }
   res.writeHead(404); res.end('not found');
 }).listen(cfg.port, '0.0.0.0', () => console.log(`health :${cfg.port}/healthz`));
 
