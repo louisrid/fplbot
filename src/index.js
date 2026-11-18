@@ -39,12 +39,13 @@ const cfg = {
 
 fs.mkdirSync(cfg.dataDir, { recursive: true });
 const statePath = path.join(cfg.dataDir, 'state.json');
-const blankState = () => ({ links: {}, weeks: {}, referrals: {}, messageId: null, lastWeek: null });
+const blankState = () => ({ links: {}, weeks: {}, referrals: {}, names: {}, messageId: null, lastWeek: null });
 let state = blankState();
 try { state = { ...blankState(), ...JSON.parse(fs.readFileSync(statePath, 'utf8')) }; } catch {}
 state.links ||= {};
 state.weeks ||= {};
 state.referrals ||= {};
+state.names ||= {};
 const save = () => {
   const tmp = `${statePath}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
@@ -100,6 +101,22 @@ function revokedCount(userId, wk = weekKey()) {
   return Object.values(state.referrals).filter((r) => r.referrerId === userId && r.week === wk && r.status === 'revoked').length;
 }
 
+function cleanLeaderboardName(value) {
+  return String(value || '').replace(/[\r\n`*_~|>]/g, '').trim().slice(0, 40);
+}
+
+async function resolveLeaderboardName(userId) {
+  const member = await guild.members.fetch(userId).catch(() => null);
+  const user = member?.user || await client.users.fetch(userId).catch(() => null);
+  const liveName = cleanLeaderboardName(member?.displayName || user?.globalName || user?.username);
+  if (liveName) {
+    state.names[userId] = liveName;
+    save();
+    return liveName;
+  }
+  return cleanLeaderboardName(state.names[userId]) || ('Creator ' + String(userId).slice(-4));
+}
+
 function extractAuditCode(entry) {
   const t = entry?.target;
   if (typeof t?.code === 'string') return t.code;
@@ -136,17 +153,18 @@ async function recoverMappings(invites) {
   return recovered;
 }
 
-function leaderboardPayload() {
+async function leaderboardPayload() {
   const wk = weekKey();
   const rows = Object.entries(state.weeks[wk] || {}).sort((a, b) => b[1] - a[1]).slice(0, 3);
   const medals = ['🥇', '🥈', '🥉'];
   const labels = ['1ST', '2ND', '3RD'];
-  const podium = [0,1,2].map((i) => {
+  const podium = (await Promise.all([0,1,2].map(async (i) => {
     const row = rows[i];
     if (!row) return `${medals[i]} **${labels[i]}**  →  **0 invites**`;
     const [uid, count] = row;
-    return `${medals[i]} **${labels[i]}**  <@${uid}>  ·  **${count} invite${count === 1 ? '' : 's'}**`;
-  }).join('\n');
+    const name = await resolveLeaderboardName(uid);
+    return `${medals[i]} **${labels[i]}**  **${name}**  ·  **${count} invite${count === 1 ? '' : 's'}**`;
+  }))).join('\n');
 
   const c = new ContainerBuilder().setAccentColor(0x75FB4C);
   const icon = guild.iconURL({ size: 128 });
@@ -193,12 +211,12 @@ async function updateLeaderboard(force = false) {
   const wk = weekKey();
   let m = await findLeaderboardMessage();
   if (!m) {
-    m = await invitesChannel.send(leaderboardPayload());
+    m = await invitesChannel.send(await leaderboardPayload());
     state.messageId = m.id;
     save();
     return;
   }
-  if (force || state.lastWeek !== wk) await m.edit(leaderboardPayload());
+  if (force || state.lastWeek !== wk) await m.edit(await leaderboardPayload());
   state.lastWeek = wk;
   save();
 }
@@ -336,6 +354,11 @@ async function syncInviteCounters({ bootstrap = false } = {}) {
 }
 
 async function getOrCreateLink(user) {
+  const displayName = cleanLeaderboardName(user.globalName || user.username);
+  if (displayName) {
+    state.names[user.id] = displayName;
+    save();
+  }
   const invites = await guild.invites.fetch({ cache: false });
   for (const [code, link] of Object.entries(state.links)) {
     if (link.referrerId !== user.id) continue;
