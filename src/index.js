@@ -12,6 +12,7 @@ import {
   GatewayIntentBits,
   MessageFlags,
   PermissionsBitField,
+  PermissionFlagsBits,
   SectionBuilder,
   SeparatorBuilder,
   SeparatorSpacingSize,
@@ -203,384 +204,193 @@ async function sweepCreatorRanksOnce() {
   }
 }
 
-async function restoreRdlndAdminOnce() {
-  const member = await guild.members.fetch('969690605695426570').catch(() => null);
-  const adminRole = guild.roles.cache.get('1427337798129680523') || await guild.roles.fetch('1427337798129680523').catch(() => null);
-  if (!member || !adminRole) {
-    console.warn('RDLND_ADMIN_RESTORE skipped');
-    return;
-  }
-  if (!member.roles.cache.has(adminRole.id)) {
-    await member.roles.add(adminRole, 'Restore Admin role removed by role-cleanup automation');
-    console.log('RDLND_ADMIN_RESTORED ' + adminRole.id);
-  } else {
-    console.log('RDLND_ADMIN_ALREADY_PRESENT ' + adminRole.id);
-  }
-}
 
 
-async function findChannel(id, name) {
-  if (id) return guild.channels.fetch(id).catch(() => null);
-  const q = norm(name);
-  return [...guild.channels.cache.values()].find((c) => c.isTextBased?.() && norm(c.name) === q) || null;
-}
 
-
-function desiredMemberCountName() {
-  return `Members: ${Number(guild?.memberCount || 0).toLocaleString('en-GB')}`;
-}
-
-async function updateMemberCountChannel(force = false) {
-  if (!memberCountChannel) return;
-  const wanted = desiredMemberCountName();
-  if (memberCountChannel.name === wanted) return;
-
-  const now = Date.now();
-  const remaining = cfg.memberCountMinUpdateMs - (now - lastMemberCountRenameAt);
-  if (!force && remaining > 0) {
-    if (!memberCountPendingTimer) {
-      memberCountPendingTimer = setTimeout(() => {
-        memberCountPendingTimer = null;
-        updateMemberCountChannel(true).catch((err) => console.error('MEMBER_COUNT_UPDATE_FAILED', err));
-      }, remaining);
-      memberCountPendingTimer.unref?.();
-    }
-    return;
-  }
-
-  if (!(await acquireLock('member-count-channel', 60))) return;
-  try {
-    const freshGuild = await client.guilds.fetch(guildId);
-    guild.memberCount = freshGuild.memberCount;
-    const exactName = desiredMemberCountName();
-    if (memberCountChannel.name !== exactName) {
-      memberCountChannel = await memberCountChannel.setName(exactName, 'Keep exact live server member count visible');
-      lastMemberCountRenameAt = Date.now();
-      console.log('MEMBER_COUNT_CHANNEL ' + exactName);
-    }
-  } finally {
-    await releaseLock('member-count-channel');
-  }
-}
-
-function queueMemberCountUpdate() {
-  updateMemberCountChannel(false).catch((err) => console.error('MEMBER_COUNT_UPDATE_FAILED', err));
-}
-
-async function resolveCreatorRole() {
-  await guild.roles.fetch();
-  if (cfg.roleId) return guild.roles.cache.get(cfg.roleId) || await guild.roles.fetch(cfg.roleId).catch(() => null);
-  const exact = [...guild.roles.cache.values()].filter((r) => !r.managed && norm(r.name) === norm(cfg.roleQuery));
-  if (exact.length === 1) return exact[0];
-  const wanted = norm(cfg.roleQuery).split(' ').filter(Boolean);
-  const fuzzy = [...guild.roles.cache.values()].filter((r) => {
-    if (r.managed) return false;
-    const name = norm(r.name);
-    return wanted.every((w) => name.includes(w));
-  });
-  return fuzzy.length === 1 ? fuzzy[0] : null;
-}
-
-function revokedCount(userId, wk = weekKey()) {
-  return Object.values(state.referrals).filter((r) => r.referrerId === userId && r.week === wk && r.status === 'revoked').length;
-}
-
-function cleanLeaderboardName(value) {
-  return String(value || '').replace(/[\r\n`*_~|>]/g, '').trim().slice(0, 40);
-}
-
-async function resolveLeaderboardName(userId) {
-  const member = await guild.members.fetch(userId).catch(() => null);
-  const user = member?.user || await client.users.fetch(userId).catch(() => null);
-  const liveName = cleanLeaderboardName(member?.displayName || user?.globalName || user?.username);
-  if (liveName) {
-    state.names[userId] = liveName;
-    save();
-    return liveName;
-  }
-  return cleanLeaderboardName(state.names[userId]) || ('Creator ' + String(userId).slice(-4));
-}
-
-function extractAuditCode(entry) {
-  const t = entry?.target;
-  if (typeof t?.code === 'string') return t.code;
-  if (typeof t?.id === 'string' && !/^\d{15,22}$/.test(t.id)) return t.id;
-  for (const c of entry?.changes || []) {
-    if (c?.key === 'code' && typeof (c.new ?? c.old) === 'string') return c.new ?? c.old;
-  }
-  return null;
-}
-
-async function recoverMappings(invites) {
-  if (!guild.members.me.permissions.has('ViewAuditLog')) return 0;
-  const active = new Set([...invites.keys()]);
-  let recovered = 0;
+async function fetchAuditType(type, maxPages = 20) {
+  const out = [];
   let before;
-  for (let page = 0; page < 5; page++) {
-    const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.InviteCreate, limit: 100, ...(before ? { before } : {}) }).catch(() => null);
+  for (let page = 0; page < maxPages; page++) {
+    const logs = await guild.fetchAuditLogs({ type, limit: 100, ...(before ? { before } : {}) }).catch((err) => {
+      console.error('AUDIT_FETCH_FAILED', type, err);
+      return null;
+    });
     if (!logs) break;
     const entries = [...logs.entries.values()];
     if (!entries.length) break;
-    for (const e of entries) {
-      const reason = String(e.reason || '');
-      const match = reason.match(/Academy referral link for .*\((\d{15,22})\)\s*$/);
-      if (!match) continue;
-      const code = extractAuditCode(e);
-      if (!code || !active.has(code) || state.links[code]) continue;
-      state.links[code] = { referrerId: match[1], createdAt: e.createdTimestamp || Date.now(), lastUses: 0 };
-      recovered++;
-    }
+    out.push(...entries);
     before = entries.at(-1)?.id;
     if (entries.length < 100 || !before) break;
   }
-  if (recovered) save();
-  return recovered;
+  return out;
 }
 
-async function leaderboardPayload() {
-  const wk = weekKey();
-  const rows = Object.entries(state.weeks[wk] || {}).sort((a, b) => b[1] - a[1]).slice(0, 3);
-  const medals = ['🥇', '🥈', '🥉'];
-  const labels = ['1ST', '2ND', '3RD'];
-  const podium = (await Promise.all([0,1,2].map(async (i) => {
-    const row = rows[i];
-    if (!row) return `${medals[i]} **${labels[i]}**  →  **0 invites**`;
-    const [uid, count] = row;
-    const name = await resolveLeaderboardName(uid);
-    return `${medals[i]} **${labels[i]}**  **${name}**  ·  **${count} invite${count === 1 ? '' : 's'}**`;
-  }))).join('\n');
-
-  const c = new ContainerBuilder().setAccentColor(0x75FB4C);
-  const icon = guild.iconURL({ size: 128 });
-  if (icon) {
-    c.addSectionComponents(new SectionBuilder()
-      .addTextDisplayComponents(
-        new TextDisplayBuilder().setContent('# 💚 INVITE & EARN'),
-        new TextDisplayBuilder().setContent('Invite creators to the **Fanvue AI Creator Academy** and climb the live weekly leaderboard.')
-      )
-      .setThumbnailAccessory(new ThumbnailBuilder().setURL(icon).setDescription('Fanvue AI Creator Academy'))
-    );
-  } else {
-    c.addTextDisplayComponents(new TextDisplayBuilder().setContent('# 💚 INVITE & EARN\nInvite creators to the **Fanvue AI Creator Academy** and climb the live weekly leaderboard.'));
+function overwritePatch(allowBits, denyBits) {
+  const patch = {};
+  for (const [name, bit] of Object.entries(PermissionFlagsBits)) {
+    if ((allowBits & bit) === bit) patch[name] = true;
+    else if ((denyBits & bit) === bit) patch[name] = false;
+    else patch[name] = null;
   }
-  c.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
-  c.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`## 🏆 THIS WEEK\n${podium}`),
-    new TextDisplayBuilder().setContent('*Counts immediately · low-quality or departed referrals can be auto-revoked · resets Monday 00:00 UK*')
-  );
-  c.addSeparatorComponents(new SeparatorBuilder().setDivider(false).setSpacing(SeparatorSpacingSize.Small));
-  c.addActionRowComponents(new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('ref:get').setLabel('GET MY INVITE LINK').setEmoji('🔗').setStyle(ButtonStyle.Success)
-  ));
-  c.addActionRowComponents(new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('ref:stats').setLabel('MY STATS').setEmoji('📊').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('ref:rewards').setLabel('REWARDS').setEmoji('🎁').setStyle(ButtonStyle.Secondary)
-  ));
-  return { flags: MessageFlags.IsComponentsV2, components: [c], allowedMentions: { parse: [] } };
+  return patch;
 }
 
-async function findLeaderboardMessage() {
-  if (state.messageId) {
-    const m = await invitesChannel.messages.fetch(state.messageId).catch(() => null);
-    if (m) return m;
-  }
-  const recent = await invitesChannel.messages.fetch({ limit: 100 });
-  const candidates = [...recent.values()].filter((m) => m.author.id === client.user.id);
-  const found = candidates.find((m) => JSON.stringify(m.components).includes('INVITE & EARN')) || null;
-  if (found) { state.messageId = found.id; save(); }
-  return found;
-}
-
-async function updateLeaderboard(force = false) {
-  const wk = weekKey();
-  let m = await findLeaderboardMessage();
-  if (!m) {
-    m = await invitesChannel.send(await leaderboardPayload());
-    state.messageId = m.id;
-    save();
+async function rollbackPrimaryPermissionOverreachOnce() {
+  const markerKey = 'fanvue:rollback:primary-permission-overreach-v1';
+  if (redis && await redis.get(markerKey) === 'done') {
+    console.log('PRIMARY_PERMISSION_ROLLBACK already complete');
     return;
   }
-  if (force || state.lastWeek !== wk) await m.edit(await leaderboardPayload());
-  state.lastWeek = wk;
-  save();
-}
+  if (!(await acquireLock('primary-permission-rollback', 300))) return;
 
-
-async function consumeInviteDelta(member) {
-  const invites = await guild.invites.fetch({ cache: false });
-  await recoverMappings(invites);
-  const candidates = [];
-  for (const invite of invites.values()) {
-    const link = state.links[invite.code];
-    if (!link) continue;
-    const uses = Number(invite.uses || 0);
-    const prev = Number(link.lastUses || 0);
-    const delta = uses - prev;
-    if (delta > 0) candidates.push({ invite, link, delta });
-  }
-  if (!candidates.length) return null;
-  candidates.sort((a, b) => b.delta - a.delta || a.invite.code.localeCompare(b.invite.code));
-  const chosen = candidates[0];
-  chosen.link.lastUses = Number(chosen.link.lastUses || 0) + 1;
-  await save();
-  if (candidates.length > 1) console.warn(`Invite attribution ambiguous for ${member.id}; chose ${chosen.invite.code}`);
-  return { code: chosen.invite.code, referrerId: chosen.link.referrerId };
-}
-
-async function processJoin(member) {
-  if (member.guild.id !== guildId) return;
-  if (!(await acquireLock(`join:${member.id}`, 120))) return;
-  await loadSharedState();
-  await new Promise((resolve) => setTimeout(resolve, 1200));
-  const used = await consumeInviteDelta(member);
-  if (!used) return;
-
-  if (member.user.bot) {
-    console.log(`Ignored bot referral ${member.id}`);
-    return;
-  }
-  if (state.referrals[member.id]) {
-    console.log(`Ignored repeat/rejoin referral ${member.id}`);
-    return;
-  }
-
-  const wk = weekKey(new Date(member.joinedTimestamp || Date.now()));
-  state.referrals[member.id] = {
-    memberId: member.id,
-    referrerId: used.referrerId,
-    code: used.code,
-    joinedAt: member.joinedTimestamp || Date.now(),
-    accountCreatedAt: member.user.createdTimestamp || 0,
-    week: wk,
-    status: 'counted',
-    reason: null,
-  };
-  await save();
-  await syncInviteCounters();
-  console.log(`COUNTED ${member.id} -> ${used.referrerId}`);
-}
-
-async function revokeReferral(memberId, reason) {
-  const r = state.referrals[memberId];
-  if (!r || r.status !== 'counted') return false;
-  r.status = 'revoked';
-  r.reason = reason;
-  r.revokedAt = Date.now();
-  await save();
-  await syncInviteCounters();
-  console.log(`REVOKED ${memberId} -> ${r.referrerId}: ${reason}`);
-  return true;
-}
-
-async function qualitySweep() {
-  const now = Date.now();
-  for (const r of Object.values(state.referrals)) {
-    if (r.status !== 'counted') continue;
-    const member = await guild.members.fetch(r.memberId).catch(() => null);
-    if (!member) {
-      await revokeReferral(r.memberId, 'left server');
-      continue;
-    }
-    const ageMs = now - Number(r.joinedAt || now);
-    if (ageMs >= 24 * 3600000 && member.pending === true) {
-      await revokeReferral(r.memberId, 'still pending server screening after 24h');
-      continue;
-    }
-    if (ageMs >= cfg.creatorRoleGraceHours * 3600000) {
-      const hasMeaningfulRole = member.roles.cache.some((role) => role.id !== guild.id && !role.managed);
-      if (!hasMeaningfulRole) {
-        await revokeReferral(r.memberId, `no qualifying server role after ${cfg.creatorRoleGraceHours}h`);
-      }
-    }
-  }
-}
-
-async function syncInviteCounters({ bootstrap = false } = {}) {
-  if (syncing) return;
-  if (!(await acquireLock('invite-sync', 30))) return;
-  syncing = true;
   try {
-    await loadSharedState();
-    const invites = await guild.invites.fetch({ cache: false });
-    if (bootstrap || Object.keys(state.links).length === 0) await recoverMappings(invites);
+    if (redis && await redis.get(markerKey) === 'done') return;
 
-    const before = JSON.stringify(state.weeks[weekKey()] || {});
-    await rebuildWeeklyCountsFromDiscord(invites);
-    const after = JSON.stringify(state.weeks[weekKey()] || {});
-    state.lastWeek = weekKey();
-    await save();
+    const roleReason = 'Primary role hierarchy: inherit lower-role permissions';
+    const overwriteReason = 'Primary role hierarchy: inherit lower-role channel access';
+    const executorId = client.user.id;
 
-    if (bootstrap || before !== after) {
-      console.log('LIVE_WEEK_COUNTS ' + JSON.stringify(state.weeks[weekKey()] || {}));
-      await updateLeaderboard(true);
+    let rolesRestored = 0;
+    let overwritesRestored = 0;
+    let overwritesDeleted = 0;
+    let conflicts = 0;
+
+    // Restore only role permission bitfields changed by the staff/everyone expansion.
+    const roleEntries = (await fetchAuditType(AuditLogEvent.RoleUpdate, 12))
+      .filter((e) => e.executor?.id === executorId && String(e.reason || '') === roleReason);
+
+    const roleGroups = new Map();
+    for (const e of roleEntries) {
+      const roleId = e.target?.id;
+      const change = (e.changes || []).find((c) => c.key === 'permissions');
+      if (!roleId || !change || change.old == null || change.new == null) continue;
+      if (!roleGroups.has(roleId)) roleGroups.set(roleId, []);
+      roleGroups.get(roleId).push({ at:e.createdTimestamp, old:BigInt(change.old), new:BigInt(change.new) });
     }
-  } finally {
-    syncing = false;
-    await releaseLock('invite-sync');
-  }
-}
 
-async function getOrCreateLink(user) {
-  const displayName = cleanLeaderboardName(user.globalName || user.username);
-  if (displayName) {
-    state.names[user.id] = displayName;
-    save();
-  }
-  const invites = await guild.invites.fetch({ cache: false });
-  for (const [code, link] of Object.entries(state.links)) {
-    if (link.referrerId !== user.id) continue;
-    const i = invites.get(code);
-    if (i) return i.url;
-  }
-  const i = await landingChannel.createInvite({ maxAge: 604800, maxUses: 50, unique: true, reason: `Academy referral link for ${user.username} (${user.id})` });
-  state.links[i.code] = { referrerId: user.id, createdAt: Date.now(), lastUses: Number(i.uses || 0) };
-  save();
-  return i.url;
-}
+    for (const [roleId, changes] of roleGroups) {
+      changes.sort((a,b) => a.at - b.at);
+      const baseline = changes[0].old;
+      const expectedCurrent = changes.at(-1).new;
+      const role = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null);
+      if (!role || !role.editable) {
+        console.warn('PRIMARY_PERMISSION_ROLE_SKIP', roleId, 'missing-or-uneditable');
+        conflicts++;
+        continue;
+      }
+      if (role.permissions.bitfield === baseline) continue;
+      if (role.permissions.bitfield !== expectedCurrent) {
+        console.warn('PRIMARY_PERMISSION_ROLE_CONFLICT', roleId, String(role.permissions.bitfield), String(expectedCurrent));
+        conflicts++;
+        continue;
+      }
+      await role.setPermissions(baseline, 'Rollback only Fanvue Invites staff/everyone permission inheritance');
+      rolesRestored++;
+    }
 
+    // Restore only channel overwrites changed/created by the staff/everyone expansion.
+    const [createdEntries, updatedEntries] = await Promise.all([
+      fetchAuditType(AuditLogEvent.ChannelOverwriteCreate, 12),
+      fetchAuditType(AuditLogEvent.ChannelOverwriteUpdate, 12)
+    ]);
 
-async function removeFiveMinuteTypingRequirement() {
-  if (guild.verificationLevel === 2) {
-    await guild.setVerificationLevel(1, 'Remove 5-minute account-age typing requirement; retain verified-email requirement');
-    console.log('VERIFICATION_LEVEL_CHANGED 2 -> 1');
-  } else {
-    console.log('VERIFICATION_LEVEL_ALREADY ' + guild.verificationLevel);
-  }
-}
+    const overwriteEntries = [...createdEntries, ...updatedEntries]
+      .filter((e) => e.executor?.id === executorId && String(e.reason || '') === overwriteReason);
 
+    const groups = new Map();
+    for (const e of overwriteEntries) {
+      const channelId = e.target?.id;
+      const roleId = e.extra?.id || (e.changes || []).find((c) => c.key === 'id')?.new;
+      if (!channelId || !roleId) continue;
+      const key = channelId + ':' + roleId;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(e);
+    }
 
+    for (const [key, entries] of groups) {
+      entries.sort((a,b) => a.createdTimestamp - b.createdTimestamp);
+      const [channelId, roleId] = key.split(':');
+      const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
+      const role = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null);
+      if (!channel?.permissionOverwrites || !role) {
+        console.warn('PRIMARY_OVERWRITE_SKIP', key, 'missing-channel-or-role');
+        conflicts++;
+        continue;
+      }
 
+      const first = entries[0];
+      const createdByUs = first.action === AuditLogEvent.ChannelOverwriteCreate;
 
+      let baselineAllow = 0n;
+      let baselineDeny = 0n;
+      if (!createdByUs) {
+        const a = (first.changes || []).find((c) => c.key === 'allow');
+        const d = (first.changes || []).find((c) => c.key === 'deny');
+        const current = channel.permissionOverwrites.cache.get(roleId);
+        baselineAllow = a?.old != null ? BigInt(a.old) : (current?.allow?.bitfield || 0n);
+        baselineDeny = d?.old != null ? BigInt(d.old) : (current?.deny?.bitfield || 0n);
+      }
 
+      let expectedAllow = createdByUs ? 0n : baselineAllow;
+      let expectedDeny = createdByUs ? 0n : baselineDeny;
+      for (const e of entries) {
+        for (const c of e.changes || []) {
+          if (c.key === 'allow' && c.new != null) expectedAllow = BigInt(c.new);
+          if (c.key === 'deny' && c.new != null) expectedDeny = BigInt(c.new);
+        }
+      }
 
+      const current = channel.permissionOverwrites.cache.get(roleId);
+      if (createdByUs) {
+        if (!current) continue;
+        if (current.allow.bitfield !== expectedAllow || current.deny.bitfield !== expectedDeny) {
+          console.warn('PRIMARY_OVERWRITE_CONFLICT', key, 'created-overwrite-changed-later');
+          conflicts++;
+          continue;
+        }
+        await channel.permissionOverwrites.delete(roleId, 'Rollback only Fanvue Invites staff/everyone permission inheritance');
+        overwritesDeleted++;
+        continue;
+      }
 
-async function inspectOverwriteExtraOnce() {
-  const reasons = new Set([
-    'Make creator ranks standalone: inherit lower-rank channel access',
-    'Primary role hierarchy: inherit lower-role channel access'
-  ]);
-  const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.ChannelOverwriteUpdate, limit: 100 }).catch(() => null);
-  if (!logs) return;
-  const rows = [...logs.entries.values()]
-    .filter((e) => reasons.has(String(e.reason || '')))
-    .slice(0, 12)
-    .map((e) => ({
-      id:e.id,
-      reason:e.reason,
-      targetId:e.target?.id || null,
-      extra:e.extra || null,
-      changes:(e.changes||[]).map((c)=>({key:c.key,old:c.old??null,new:c.new??null}))
+      if (!current) {
+        console.warn('PRIMARY_OVERWRITE_CONFLICT', key, 'existing-overwrite-missing');
+        conflicts++;
+        continue;
+      }
+      if (current.allow.bitfield !== expectedAllow || current.deny.bitfield !== expectedDeny) {
+        console.warn('PRIMARY_OVERWRITE_CONFLICT', key, 'overwrite-changed-later');
+        conflicts++;
+        continue;
+      }
+
+      await channel.permissionOverwrites.edit(
+        roleId,
+        overwritePatch(baselineAllow, baselineDeny),
+        { reason:'Rollback only Fanvue Invites staff/everyone permission inheritance' }
+      );
+      overwritesRestored++;
+    }
+
+    if (redis) await redis.set(markerKey, 'done');
+    console.log('PRIMARY_PERMISSION_ROLLBACK_COMPLETE ' + JSON.stringify({
+      rolesRestored,
+      overwritesRestored,
+      overwritesDeleted,
+      conflicts
     }));
-  console.log('OVERWRITE_EXTRA_SAMPLE ' + JSON.stringify(rows));
+  } finally {
+    await releaseLock('primary-permission-rollback');
+  }
 }
+
 client.once('clientReady', async () => {
   guild = await client.guilds.fetch(guildId);
-  await inspectOverwriteExtraOnce();
   await loadSharedState();
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
   await guild.roles.fetch();
-  await restoreRdlndAdminOnce();
+  await rollbackPrimaryPermissionOverreachOnce();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
   memberCountChannel = await guild.channels.fetch(cfg.memberCountChannelId).catch(() => null);
