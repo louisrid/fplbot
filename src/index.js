@@ -350,33 +350,24 @@ async function getOrCreateLink(user) {
 
 
 async function runOneTimeServerAudit() {
-  const typeName = (t) => String(t);
-  const now = Date.now();
-  const channels = [];
-  for (const c of [...guild.channels.cache.values()].sort((a,b) => (a.rawPosition ?? 0) - (b.rawPosition ?? 0))) {
-    let lastMessageAt = null;
-    if (c.isTextBased?.() && !c.isDMBased?.() && c.messages?.fetch) {
-      const one = await c.messages.fetch({ limit: 1 }).catch(() => null);
-      const m = one?.first?.();
-      if (m) lastMessageAt = new Date(m.createdTimestamp).toISOString();
-    }
-    const everyone = c.permissionOverwrites?.cache?.get(guild.roles.everyone.id);
-    const me = c.permissionsFor?.(guild.members.me);
-    channels.push({
-      id: c.id,
-      name: c.name,
-      type: typeName(c.type),
-      parent: c.parent?.name || null,
-      position: c.rawPosition ?? c.position ?? null,
-      nsfw: c.nsfw ?? null,
-      slowmode: c.rateLimitPerUser ?? null,
-      viewEveryone: everyone ? !everyone.deny.has('ViewChannel') : null,
-      botView: me?.has('ViewChannel') ?? null,
-      botHistory: me?.has('ReadMessageHistory') ?? null,
-      lastMessageAt,
-      inactiveDays: lastMessageAt ? Math.floor((now - Date.parse(lastMessageAt)) / 86400000) : null
+  const channels = [...guild.channels.cache.values()]
+    .sort((a,b) => (a.rawPosition ?? 0) - (b.rawPosition ?? 0))
+    .map((c) => {
+      const everyone = c.permissionOverwrites?.cache?.get(guild.roles.everyone.id);
+      const me = c.permissionsFor?.(guild.members.me);
+      return {
+        id: c.id,
+        name: c.name,
+        type: String(c.type),
+        parent: c.parent?.name || null,
+        position: c.rawPosition ?? c.position ?? null,
+        nsfw: c.nsfw ?? null,
+        slowmode: c.rateLimitPerUser ?? null,
+        viewEveryone: everyone ? !everyone.deny.has('ViewChannel') : null,
+        botView: me?.has('ViewChannel') ?? null,
+        botHistory: me?.has('ReadMessageHistory') ?? null
+      };
     });
-  }
 
   const roles = [...guild.roles.cache.values()]
     .sort((a,b) => b.position - a.position)
@@ -393,11 +384,9 @@ async function runOneTimeServerAudit() {
 
   const automod = await guild.autoModerationRules.fetch().catch(() => null);
   let onboarding = null;
-  if (typeof guild.fetchOnboarding === 'function') {
-    onboarding = await guild.fetchOnboarding().catch(() => null);
-  }
-
+  if (typeof guild.fetchOnboarding === 'function') onboarding = await guild.fetchOnboarding().catch(() => null);
   const activeInvites = await guild.invites.fetch({ cache: false }).catch(() => null);
+
   const summary = {
     name: guild.name,
     id: guild.id,
