@@ -31,6 +31,8 @@ const cfg = {
   invitesChannelName: process.env.INVITES_CHANNEL_NAME || '🎁｜invites',
   landingChannelId: process.env.LANDING_CHANNEL_ID?.trim() || '',
   landingChannelName: process.env.LANDING_CHANNEL_QUERY || 'join',
+  memberCountChannelId: process.env.MEMBER_COUNT_CHANNEL_ID?.trim() || '1499031772699299980',
+  memberCountMinUpdateMs: Math.max(60000, Number(process.env.MEMBER_COUNT_MIN_UPDATE_MS || 300000)),
   dataDir: path.resolve(process.env.DATA_DIR || './data'),
   port: Number(process.env.PORT || 10000),
   timeZone: process.env.TIME_ZONE || 'Europe/London',
@@ -142,16 +144,61 @@ async function rebuildWeeklyCountsFromDiscord(invites = null) {
 }
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites] });
-let guild, invitesChannel, landingChannel, creatorRole;
+let guild, invitesChannel, landingChannel, creatorRole, memberCountChannel;
 let syncing = false;
 let refreshTimer = null;
 let qualityTimer = null;
+let memberCountTimer = null;
+let memberCountPendingTimer = null;
+let lastMemberCountRenameAt = 0;
 let joinQueue = Promise.resolve();
 
 async function findChannel(id, name) {
   if (id) return guild.channels.fetch(id).catch(() => null);
   const q = norm(name);
   return [...guild.channels.cache.values()].find((c) => c.isTextBased?.() && norm(c.name) === q) || null;
+}
+
+
+function desiredMemberCountName() {
+  return `Members: ${Number(guild?.memberCount || 0).toLocaleString('en-GB')}`;
+}
+
+async function updateMemberCountChannel(force = false) {
+  if (!memberCountChannel) return;
+  const wanted = desiredMemberCountName();
+  if (memberCountChannel.name === wanted) return;
+
+  const now = Date.now();
+  const remaining = cfg.memberCountMinUpdateMs - (now - lastMemberCountRenameAt);
+  if (!force && remaining > 0) {
+    if (!memberCountPendingTimer) {
+      memberCountPendingTimer = setTimeout(() => {
+        memberCountPendingTimer = null;
+        updateMemberCountChannel(true).catch((err) => console.error('MEMBER_COUNT_UPDATE_FAILED', err));
+      }, remaining);
+      memberCountPendingTimer.unref?.();
+    }
+    return;
+  }
+
+  if (!(await acquireLock('member-count-channel', 60))) return;
+  try {
+    const freshGuild = await client.guilds.fetch(guildId);
+    guild.memberCount = freshGuild.memberCount;
+    const exactName = desiredMemberCountName();
+    if (memberCountChannel.name !== exactName) {
+      memberCountChannel = await memberCountChannel.setName(exactName, 'Keep exact live server member count visible');
+      lastMemberCountRenameAt = Date.now();
+      console.log('MEMBER_COUNT_CHANNEL ' + exactName);
+    }
+  } finally {
+    await releaseLock('member-count-channel');
+  }
+}
+
+function queueMemberCountUpdate() {
+  updateMemberCountChannel(false).catch((err) => console.error('MEMBER_COUNT_UPDATE_FAILED', err));
 }
 
 async function resolveCreatorRole() {
@@ -445,7 +492,9 @@ client.once('clientReady', async () => {
   await guild.channels.fetch();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
+  memberCountChannel = await guild.channels.fetch(cfg.memberCountChannelId).catch(() => null);
   if (!invitesChannel || !landingChannel) throw new Error('Could not find #invites and/or #join. Set their IDs in Render environment variables.');
+  if (!memberCountChannel) console.warn('Member count voice channel not found: ' + cfg.memberCountChannelId);
   creatorRole = await resolveCreatorRole();
   if (!creatorRole) console.warn('NEW CREATOR role not resolved. Using screening + no-role fallback quality checks.');
   else console.log(`Quality role: ${creatorRole.name} (${creatorRole.id})`);
@@ -453,21 +502,26 @@ client.once('clientReady', async () => {
   await syncInviteCounters({ bootstrap: true });
   await updateLeaderboard(true);
   await qualitySweep();
+  await updateMemberCountChannel(true);
 
   refreshTimer = setInterval(() => syncInviteCounters().catch(console.error), cfg.pollMs);
   refreshTimer.unref();
   qualityTimer = setInterval(() => qualitySweep().catch(console.error), cfg.qualitySweepMs);
   qualityTimer.unref();
-  console.log(`READY ${client.user.tag} · ${guild.name} · live sync ${cfg.pollMs/1000}s · quality sweep ${cfg.qualitySweepMs/60000}m`);
+  memberCountTimer = setInterval(() => updateMemberCountChannel(false).catch(console.error), 300000);
+  memberCountTimer.unref();
+  console.log(`READY ${client.user.tag} · ${guild.name} · live sync ${cfg.pollMs/1000}s · quality sweep ${cfg.qualitySweepMs/60000}m · exact member count enabled`);
 });
 
 client.on('guildMemberAdd', (member) => {
   if (member.guild.id !== guildId) return;
+  queueMemberCountUpdate();
   joinQueue = joinQueue.then(() => processJoin(member)).catch(console.error);
 });
 
 client.on('guildMemberRemove', (member) => {
   if (member.guild.id !== guildId) return;
+  queueMemberCountUpdate();
   revokeReferral(member.id, 'left server').catch(console.error);
 });
 
