@@ -80,6 +80,13 @@ async function acquireLock(name, ttlSeconds = 30) {
   return result === 'OK';
 }
 
+async function releaseLock(name) {
+  if (!redis) return;
+  const key = `fanvue:lock:${name}`;
+  const script = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+  await redis.eval(script, 1, key, INSTANCE_ID).catch((err) => console.error('REDIS_UNLOCK_FAILED', err));
+}
+
 function norm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
 function weekKey(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -346,12 +353,12 @@ async function qualitySweep() {
 
 async function syncInviteCounters({ bootstrap = false } = {}) {
   if (syncing) return;
-  if (!(await acquireLock('invite-sync', 8))) return;
+  if (!(await acquireLock('invite-sync', 30))) return;
   syncing = true;
   try {
     await loadSharedState();
     const invites = await guild.invites.fetch({ cache: false });
-    await recoverMappings(invites);
+    if (bootstrap || Object.keys(state.links).length === 0) await recoverMappings(invites);
     const wk = weekKey();
     let changed = false;
 
@@ -377,7 +384,10 @@ async function syncInviteCounters({ bootstrap = false } = {}) {
     state.lastWeek = wk;
     await save();
     if (changed) await updateLeaderboard(true);
-  } finally { syncing = false; }
+  } finally {
+    syncing = false;
+    await releaseLock('invite-sync');
+  }
 }
 
 async function getOrCreateLink(user) {
