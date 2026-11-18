@@ -3,7 +3,8 @@ services:
     name: fanvue-academy-invite-bot
     runtime: node
     plan: starter
-    buildCommand: sh rebuild-source.sh && npm install --no-audit --no-fund
+    region: frankfurt
+    buildCommand: npm install --no-audit --no-fund
     startCommand: npm start
     healthCheckPath: /healthz
     autoDeploy: true
@@ -12,12 +13,16 @@ services:
         sync: false
       - key: GUILD_ID
         value: "1427337798104383694"
-      - key: NODE_VERSION
-        value: "24.17.0"
-      - key: AUTO_SETUP
-        value: "true"
       - key: DATA_DIR
         value: /var/data
+      - key: TIME_ZONE
+        value: Europe/London
+      - key: POLL_MS
+        value: "15000"
+      - key: INVITES_CHANNEL_NAME
+        value: "🎁｜invites"
+      - key: LANDING_CHANNEL_QUERY
+        value: join
       - key: PORT
         value: "10000"
     disk:
