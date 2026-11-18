@@ -324,7 +324,7 @@ async function recoverMappings(invites) {
 async function leaderboardPayload() {
   const wk = weekKey();
   const rows = Object.entries(state.weeks[wk] || {}).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  const medals = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'];
+  const medals = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'];
   const labels = ['1ST', '2ND', '3RD', '4TH', '5TH'];
   const podium = (await Promise.all([0,1,2,3,4].map(async (i) => {
     const row = rows[i];
