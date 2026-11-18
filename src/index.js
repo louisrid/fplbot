@@ -11,6 +11,7 @@ import {
   ContainerBuilder,
   GatewayIntentBits,
   MessageFlags,
+  PermissionsBitField,
   SectionBuilder,
   SeparatorBuilder,
   SeparatorSpacingSize,
@@ -163,6 +164,62 @@ const CREATOR_RANK_IDS = [
 ];
 
 let creatorRankSweepRunning = false;
+
+
+async function ensureCreatorRankInheritance() {
+  await guild.roles.fetch();
+  await guild.channels.fetch();
+
+  const roles = CREATOR_RANK_IDS.map((id) => guild.roles.cache.get(id)).filter(Boolean);
+  if (roles.length !== CREATOR_RANK_IDS.length) {
+    console.warn('CREATOR_RANK_INHERITANCE skipped: one or more creator ranks missing');
+    return;
+  }
+
+  // Make every higher rank contain all guild-level permissions of itself + lower ranks.
+  for (let i = 0; i < roles.length; i++) {
+    let merged = 0n;
+    for (const lower of roles.slice(i)) merged |= lower.permissions.bitfield;
+    if (roles[i].permissions.bitfield !== merged) {
+      await roles[i].setPermissions(merged, 'Make creator ranks standalone: inherit lower-rank permissions');
+      console.log('CREATOR_RANK_PERMS_INHERITED ' + roles[i].id);
+    }
+  }
+
+  // Make every higher rank inherit every explicit channel ALLOW from lower ranks.
+  // Existing higher-rank denies are preserved; lower-rank denies are not copied upward.
+  let edited = 0;
+  for (const channel of guild.channels.cache.values()) {
+    if (!channel.permissionOverwrites?.cache) continue;
+
+    for (let i = 0; i < roles.length; i++) {
+      let allowBits = 0n;
+      for (const lower of roles.slice(i)) {
+        const ow = channel.permissionOverwrites.cache.get(lower.id);
+        if (ow) allowBits |= ow.allow.bitfield;
+      }
+      if (allowBits === 0n) continue;
+
+      const existing = channel.permissionOverwrites.cache.get(roles[i].id);
+      const existingAllow = existing?.allow?.bitfield || 0n;
+      const mergedAllow = existingAllow | allowBits;
+      if (mergedAllow === existingAllow) continue;
+
+      const patch = {};
+      for (const perm of new PermissionsBitField(mergedAllow).toArray()) patch[perm] = true;
+      for (const perm of existing?.deny?.toArray?.() || []) patch[perm] = false;
+
+      await channel.permissionOverwrites.edit(
+        roles[i],
+        patch,
+        { reason: 'Make creator ranks standalone: inherit lower-rank channel access' }
+      );
+      edited++;
+    }
+  }
+
+  console.log('CREATOR_RANK_INHERITANCE_COMPLETE ' + JSON.stringify({ channelOverwritesEdited: edited }));
+}
 
 async function normalizeCreatorRanks(member, reason = 'Keep only highest creator rank') {
   if (!member || member.user?.bot) return false;
@@ -581,6 +638,7 @@ client.once('clientReady', async () => {
   qualityTimer.unref();
   memberCountTimer = setInterval(() => updateMemberCountChannel(false).catch(console.error), 300000);
   memberCountTimer.unref();
+  await ensureCreatorRankInheritance();
   console.log(`READY ${client.user.tag} · ${guild.name} · live sync ${cfg.pollMs/1000}s · quality sweep ${cfg.qualitySweepMs/60000}m · exact member count enabled`);
   setTimeout(() => sweepCreatorRanksOnce().catch(console.error), 5000).unref?.();
 });
