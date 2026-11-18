@@ -205,16 +205,6 @@ async function sweepCreatorRanksOnce() {
 
 
 
-
-async function removeFiveMinuteTypingRequirement() {
-  if (guild.verificationLevel === 2) {
-    await guild.setVerificationLevel(1, 'Remove 5-minute account-age typing requirement; retain verified-email requirement');
-    console.log('VERIFICATION_LEVEL_CHANGED 2 -> 1');
-  } else {
-    console.log('VERIFICATION_LEVEL_ALREADY ' + guild.verificationLevel);
-  }
-}
-
 client.once('clientReady', async () => {
   guild = await client.guilds.fetch(guildId);
   await loadSharedState();
