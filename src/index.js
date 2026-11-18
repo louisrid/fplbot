@@ -42,7 +42,7 @@ const statePath = path.join(cfg.dataDir, 'state.json');
 const redis = process.env.REDIS_URL ? new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: 3 }) : null;
 const STATE_KEY = 'fanvue:invite-state:v2';
 const INSTANCE_ID = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
-const blankState = () => ({ links: {}, weeks: {}, referrals: {}, names: {}, messageId: null, lastWeek: null });
+const blankState = () => ({ links: {}, weeks: {}, referrals: {}, names: {}, baselines: {}, messageId: null, lastWeek: null });
 let state = blankState();
 try { state = { ...blankState(), ...JSON.parse(fs.readFileSync(statePath, 'utf8')) }; } catch {}
 
@@ -51,6 +51,7 @@ function normaliseState() {
   state.weeks ||= {};
   state.referrals ||= {};
   state.names ||= {};
+  state.baselines ||= {};
 }
 normaliseState();
 
@@ -103,6 +104,41 @@ function weekCount(userId, wk = weekKey()) { return Number(state.weeks[wk]?.[use
 function addCount(userId, n, wk = weekKey()) {
   if (!state.weeks[wk]) state.weeks[wk] = {};
   state.weeks[wk][userId] = Math.max(0, Number(state.weeks[wk][userId] || 0) + Number(n || 0));
+}
+
+function revokedByReferrer(userId, wk = weekKey()) {
+  return Object.values(state.referrals).filter((r) => r.referrerId === userId && r.week === wk && r.status === 'revoked').length;
+}
+
+async function rebuildWeeklyCountsFromDiscord(invites = null) {
+  const wk = weekKey();
+  const allInvites = invites || await guild.invites.fetch({ cache: false });
+  state.baselines[wk] ||= {};
+  const counts = {};
+
+  for (const [code, link] of Object.entries(state.links)) {
+    const invite = allInvites.get(code);
+    if (!invite) continue;
+
+    const uses = Number(invite.uses || 0);
+    const createdWeek = weekKey(new Date(link.createdAt || Date.now()));
+
+    if (state.baselines[wk][code] == null) {
+      state.baselines[wk][code] = createdWeek === wk ? 0 : uses;
+    }
+
+    const baseline = Number(state.baselines[wk][code] || 0);
+    const weeklyUses = Math.max(0, uses - baseline);
+    counts[link.referrerId] = Number(counts[link.referrerId] || 0) + weeklyUses;
+    link.lastUses = uses;
+  }
+
+  for (const [uid, n] of Object.entries(counts)) {
+    counts[uid] = Math.max(0, n - revokedByReferrer(uid, wk));
+  }
+
+  state.weeks[wk] = counts;
+  return counts;
 }
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites] });
@@ -306,9 +342,8 @@ async function processJoin(member) {
     status: 'counted',
     reason: null,
   };
-  addCount(used.referrerId, 1, wk);
   await save();
-  await updateLeaderboard(true);
+  await syncInviteCounters();
   console.log(`COUNTED ${member.id} -> ${used.referrerId}`);
 }
 
@@ -318,9 +353,8 @@ async function revokeReferral(memberId, reason) {
   r.status = 'revoked';
   r.reason = reason;
   r.revokedAt = Date.now();
-  addCount(r.referrerId, -1, r.week);
   await save();
-  await updateLeaderboard(true);
+  await syncInviteCounters();
   console.log(`REVOKED ${memberId} -> ${r.referrerId}: ${reason}`);
   return true;
 }
@@ -359,31 +393,17 @@ async function syncInviteCounters({ bootstrap = false } = {}) {
     await loadSharedState();
     const invites = await guild.invites.fetch({ cache: false });
     if (bootstrap || Object.keys(state.links).length === 0) await recoverMappings(invites);
-    const wk = weekKey();
-    let changed = false;
 
-    if (state.lastWeek && state.lastWeek !== wk) changed = true;
-
-    for (const invite of invites.values()) {
-      const link = state.links[invite.code];
-      if (!link) continue;
-      const uses = Number(invite.uses || 0);
-      const createdWeek = weekKey(new Date(link.createdAt || Date.now()));
-      const prev = Number(link.lastUses || 0);
-
-      if (bootstrap && prev === 0 && uses > 0 && createdWeek === wk) {
-        addCount(link.referrerId, uses, wk);
-        changed = true;
-      } else if (uses > prev) {
-        addCount(link.referrerId, uses - prev, wk);
-        changed = true;
-      }
-      link.lastUses = uses;
-    }
-
-    state.lastWeek = wk;
+    const before = JSON.stringify(state.weeks[weekKey()] || {});
+    await rebuildWeeklyCountsFromDiscord(invites);
+    const after = JSON.stringify(state.weeks[weekKey()] || {});
+    state.lastWeek = weekKey();
     await save();
-    if (changed) await updateLeaderboard(true);
+
+    if (bootstrap || before !== after) {
+      console.log('LIVE_WEEK_COUNTS ' + JSON.stringify(state.weeks[weekKey()] || {}));
+      await updateLeaderboard(true);
+    }
   } finally {
     syncing = false;
     await releaseLock('invite-sync');
