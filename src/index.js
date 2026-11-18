@@ -383,10 +383,11 @@ client.on('interactionCreate', async (i) => {
       return;
     }
     if (i.customId === 'ref:stats') {
+      await i.deferReply({ ephemeral: true });
       await syncInviteCounters();
       const n = weekCount(i.user.id);
       const revoked = revokedCount(i.user.id);
-      await i.reply({ content: `📊 **Your stats**\nThis week: **${n} invite${n === 1 ? '' : 's'}**\nAuto-revoked this week: **${revoked}**\nResets Monday at 00:00 UK.`, ephemeral: true });
+      await i.editReply(`📊 **Your stats**\nThis week: **${n} invite${n === 1 ? '' : 's'}**\nAuto-revoked this week: **${revoked}**\nResets Monday at 00:00 UK.`);
       return;
     }
     if (i.customId === 'ref:rewards') {
