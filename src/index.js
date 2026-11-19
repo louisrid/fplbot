@@ -251,51 +251,60 @@ async function configureHangoutChannel() {
     );
   }
 
-  // Match the normal post-verification visibility model used by #general:
-  // @everyone cannot see/join; any role/user explicitly allowed to view #general
-  // can see and join Hangout.
   const general = guild.channels.cache.get('1427337799451021521')
     || [...guild.channels.cache.values()].find((c) => c.name === '💬｜general');
 
-  if (!general) throw new Error('Could not resolve #general for Hangout permission sync');
+  if (!general) throw new Error('Could not resolve #general for Hangout visibility sync');
 
-  const permissionEntries = [
-    {
-      id: guild.roles.everyone.id,
-      deny: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect],
-    },
-  ];
+  const viewerOverwrites = [...general.permissionOverwrites.cache.values()]
+    .filter((o) => o.allow.has(PermissionsBitField.Flags.ViewChannel));
 
-  for (const overwrite of general.permissionOverwrites.cache.values()) {
-    if (overwrite.id === guild.roles.everyone.id) continue;
+  // Hide Hangout before verification, but leave voice Connect inherited from
+  // the server/roles rather than forcing a channel-level deny or allow.
+  await memberCountChannel.permissionOverwrites.edit(
+    guild.roles.everyone,
+    { ViewChannel: false, Connect: null },
+    { reason: 'Hide Hangout until normal server access is granted' }
+  );
 
-    const canView = overwrite.allow.has(PermissionsBitField.Flags.ViewChannel);
-    if (!canView) continue;
-
-    permissionEntries.push({
-      id: overwrite.id,
-      type: overwrite.type,
-      allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect],
-    });
+  for (const overwrite of viewerOverwrites) {
+    await memberCountChannel.permissionOverwrites.edit(
+      overwrite.id,
+      { ViewChannel: true, Connect: null },
+      { reason: 'Match Hangout visibility to #general without overriding voice access' }
+    );
   }
 
-  await memberCountChannel.permissionOverwrites.set(
-    permissionEntries,
-    'Match Hangout visibility to verified #general access'
+  // Restore the existing restricted-chat overwrite that pre-dated the Hangout changes.
+  await memberCountChannel.permissionOverwrites.edit(
+    '1540566862709137440',
+    { SendMessages: false },
+    { reason: 'Preserve existing restricted chat permission on Hangout' }
   );
 
   memberCountChannel = await memberCountChannel.setPosition(0, {
     reason: 'Keep Hangout as top standalone voice channel'
   });
 
-  console.log('HANGOUT_CONFIGURED ' + JSON.stringify({
+  const verifiedChecks = viewerOverwrites.map((o) => {
+    const role = guild.roles.cache.get(o.id);
+    return role ? {
+      id: role.id,
+      name: role.name,
+      view: memberCountChannel.permissionsFor(role)?.has(PermissionsBitField.Flags.ViewChannel) ?? null,
+      connect: memberCountChannel.permissionsFor(role)?.has(PermissionsBitField.Flags.Connect) ?? null
+    } : null;
+  }).filter(Boolean);
+
+  console.log('HANGOUT_VERIFIED ' + JSON.stringify({
     id: memberCountChannel.id,
     name: memberCountChannel.name,
     parentId: memberCountChannel.parentId,
     position: memberCountChannel.rawPosition ?? memberCountChannel.position,
     everyoneView: memberCountChannel.permissionsFor(guild.roles.everyone)?.has(PermissionsBitField.Flags.ViewChannel) ?? null,
     everyoneConnect: memberCountChannel.permissionsFor(guild.roles.everyone)?.has(PermissionsBitField.Flags.Connect) ?? null,
-    syncedFromGeneral: general.id
+    verifiedChecks,
+    connectedMembers: [...memberCountChannel.members.values()].map((m) => ({ id: m.id, name: m.displayName }))
   }));
 }
 
