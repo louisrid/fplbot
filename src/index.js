@@ -259,27 +259,27 @@ async function configureHangoutChannel() {
   const viewerOverwrites = [...general.permissionOverwrites.cache.values()]
     .filter((o) => o.allow.has(PermissionsBitField.Flags.ViewChannel));
 
-  // Hide Hangout before verification, but leave voice Connect inherited from
-  // the server/roles rather than forcing a channel-level deny or allow.
-  await memberCountChannel.permissionOverwrites.edit(
-    guild.roles.everyone,
-    { ViewChannel: false, Connect: null },
-    { reason: 'Hide Hangout until normal server access is granted' }
-  );
+  const permissionEntries = [
+    {
+      id: guild.roles.everyone.id,
+      allow: [PermissionsBitField.Flags.Connect],
+      deny: [PermissionsBitField.Flags.ViewChannel],
+    },
+    ...viewerOverwrites.map((o) => ({
+      id: o.id,
+      type: o.type,
+      allow: [PermissionsBitField.Flags.ViewChannel],
+    })),
+    {
+      id: '1540566862709137440',
+      type: 0,
+      deny: [PermissionsBitField.Flags.SendMessages],
+    },
+  ];
 
-  for (const overwrite of viewerOverwrites) {
-    await memberCountChannel.permissionOverwrites.edit(
-      overwrite.id,
-      { ViewChannel: true, Connect: null },
-      { reason: 'Match Hangout visibility to #general without overriding voice access' }
-    );
-  }
-
-  // Restore the existing restricted-chat overwrite that pre-dated the Hangout changes.
-  await memberCountChannel.permissionOverwrites.edit(
-    '1540566862709137440',
-    { SendMessages: false },
-    { reason: 'Preserve existing restricted chat permission on Hangout' }
+  await memberCountChannel.permissionOverwrites.set(
+    permissionEntries,
+    'Keep Hangout hidden until verification while preserving normal voice access'
   );
 
   memberCountChannel = await memberCountChannel.setPosition(0, {
