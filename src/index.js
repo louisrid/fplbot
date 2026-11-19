@@ -239,6 +239,16 @@ function desiredMemberCountName() {
   return `Members: ${Number(guild?.memberCount || 0).toLocaleString('en-GB')}`;
 }
 
+async function lockMemberCountChannel() {
+  if (!memberCountChannel) return;
+  await memberCountChannel.permissionOverwrites.edit(
+    guild.roles.everyone,
+    { Connect: false },
+    { reason: 'Member count channel is display-only' }
+  );
+  console.log('MEMBER_COUNT_CHANNEL_LOCKED ' + memberCountChannel.id);
+}
+
 async function updateMemberCountChannel(force = false) {
   if (!memberCountChannel) return;
   const wanted = desiredMemberCountName();
@@ -589,6 +599,7 @@ client.once('clientReady', async () => {
   }
   if (!invitesChannel || !landingChannel) throw new Error('Could not find #invites and/or #join. Set their IDs in Render environment variables.');
   if (!memberCountChannel) console.warn('Member count voice channel could not be resolved or created.');
+  else await lockMemberCountChannel();
   creatorRole = await resolveCreatorRole();
   if (!creatorRole) console.warn('NEW CREATOR role not resolved. Using screening + no-role fallback quality checks.');
   else console.log(`Quality role: ${creatorRole.name} (${creatorRole.id})`);
