@@ -174,6 +174,9 @@ let guild, invitesChannel, landingChannel, creatorRole, memberCountChannel;
 let syncing = false;
 let refreshTimer = null;
 let qualityTimer = null;
+let memberCountTimer = null;
+let memberCountPendingTimer = null;
+let lastMemberCountRenameAt = 0;
 let joinQueue = Promise.resolve();
 
 
@@ -235,7 +238,7 @@ async function findChannel(id, name) {
 async function configureHangoutChannel() {
   if (!memberCountChannel) return;
 
-  const hangoutName = '🎙️ // 𝗛𝗔𝗡𝗚𝗢𝗨𝗧';
+  const hangoutName = `🎙️ ${Number(guild?.memberCount || 0).toLocaleString('en-GB')}`;
 
   if (memberCountChannel.parentId) {
     memberCountChannel = await memberCountChannel.setParent(null, {
@@ -247,7 +250,7 @@ async function configureHangoutChannel() {
   if (memberCountChannel.name !== hangoutName) {
     memberCountChannel = await memberCountChannel.setName(
       hangoutName,
-      'Rename former member counter to Hangout'
+      'Show live member count on public voice channel'
     );
   }
 
@@ -306,6 +309,41 @@ async function configureHangoutChannel() {
     verifiedChecks,
     connectedMembers: [...memberCountChannel.members.values()].map((m) => ({ id: m.id, name: m.displayName }))
   }));
+}
+
+async function updateVoiceMemberCount(force = false) {
+  if (!memberCountChannel) return;
+
+  const freshGuild = await client.guilds.fetch(guildId).catch(() => null);
+  if (freshGuild) guild.memberCount = freshGuild.memberCount;
+
+  const wanted = `🎙️ ${Number(guild?.memberCount || 0).toLocaleString('en-GB')}`;
+  if (memberCountChannel.name === wanted) return;
+
+  const now = Date.now();
+  const remaining = cfg.memberCountMinUpdateMs - (now - lastMemberCountRenameAt);
+
+  if (!force && remaining > 0) {
+    if (!memberCountPendingTimer) {
+      memberCountPendingTimer = setTimeout(() => {
+        memberCountPendingTimer = null;
+        updateVoiceMemberCount(true).catch((err) => console.error('VOICE_COUNT_UPDATE_FAILED', err));
+      }, remaining);
+      memberCountPendingTimer.unref?.();
+    }
+    return;
+  }
+
+  memberCountChannel = await memberCountChannel.setName(
+    wanted,
+    'Keep live member count visible on voice channel'
+  );
+  lastMemberCountRenameAt = Date.now();
+  console.log('VOICE_COUNT_CHANNEL ' + wanted);
+}
+
+function queueVoiceMemberCountUpdate() {
+  updateVoiceMemberCount(false).catch((err) => console.error('VOICE_COUNT_UPDATE_FAILED', err));
 }
 
 async function resolveCreatorRole() {
@@ -604,12 +642,15 @@ client.once('clientReady', async () => {
   memberCountChannel = await guild.channels.fetch('1572455999158231260').catch(() => null);
   if (!memberCountChannel) {
     memberCountChannel = [...guild.channels.cache.values()].find((c) =>
-      (c.type === 2 || c.type === 13) && (c.name === '🎙️ // 𝗛𝗔𝗡𝗚𝗢𝗨𝗧' || /^Members:/i.test(c.name))
+      (c.type === 2 || c.type === 13) && (/^🎙️\s[\d,]+$/.test(c.name) || c.name === '🎙️ // 𝗛𝗔𝗡𝗚𝗢𝗨𝗧' || /^Members:/i.test(c.name))
     ) || null;
   }
   if (!invitesChannel || !landingChannel) throw new Error('Could not find #invites and/or #join. Set their IDs in Render environment variables.');
   if (!memberCountChannel) console.warn('Hangout voice channel could not be resolved.');
-  else await configureHangoutChannel();
+  else {
+    await configureHangoutChannel();
+    await updateVoiceMemberCount(true);
+  }
   creatorRole = await resolveCreatorRole();
   if (!creatorRole) console.warn('NEW CREATOR role not resolved. Using screening + no-role fallback quality checks.');
   else console.log(`Quality role: ${creatorRole.name} (${creatorRole.id})`);
@@ -622,17 +663,21 @@ client.once('clientReady', async () => {
   refreshTimer.unref();
   qualityTimer = setInterval(() => qualitySweep().catch(console.error), cfg.qualitySweepMs);
   qualityTimer.unref();
-  console.log(`READY ${client.user.tag} · ${guild.name} · live sync ${cfg.pollMs/1000}s · quality sweep ${cfg.qualitySweepMs/60000}m · hangout enabled`);
+  memberCountTimer = setInterval(() => updateVoiceMemberCount(false).catch(console.error), 300000);
+  memberCountTimer.unref();
+  console.log(`READY ${client.user.tag} · ${guild.name} · live sync ${cfg.pollMs/1000}s · quality sweep ${cfg.qualitySweepMs/60000}m · live voice member count enabled`);
   setTimeout(() => sweepCreatorRanksOnce().catch(console.error), 5000).unref?.();
 });
 
 client.on('guildMemberAdd', (member) => {
   if (member.guild.id !== guildId) return;
+  queueVoiceMemberCountUpdate();
   joinQueue = joinQueue.then(() => processJoin(member)).catch(console.error);
 });
 
 client.on('guildMemberRemove', (member) => {
   if (member.guild.id !== guildId) return;
+  queueVoiceMemberCountUpdate();
   revokeReferral(member.id, 'left server').catch(console.error);
 });
 
