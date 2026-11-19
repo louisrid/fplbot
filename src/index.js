@@ -235,55 +235,43 @@ async function findChannel(id, name) {
 }
 
 
-function desiredMemberCountName() {
-  return `Members: ${Number(guild?.memberCount || 0).toLocaleString('en-GB')}`;
-}
-
-async function lockMemberCountChannel() {
+async function configureHangoutChannel() {
   if (!memberCountChannel) return;
+  const hangoutName = '🎙️ // 𝗛𝗔𝗡𝗚𝗢𝗨𝗧';
+
   await memberCountChannel.permissionOverwrites.edit(
     guild.roles.everyone,
-    { Connect: false },
-    { reason: 'Member count channel is display-only' }
+    { Connect: true },
+    { reason: 'Restore public access to Hangout voice channel' }
   );
-  console.log('MEMBER_COUNT_CHANNEL_LOCKED ' + memberCountChannel.id);
-}
 
-async function updateMemberCountChannel(force = false) {
-  if (!memberCountChannel) return;
-  const wanted = desiredMemberCountName();
-  if (memberCountChannel.name === wanted) return;
-
-  const now = Date.now();
-  const remaining = cfg.memberCountMinUpdateMs - (now - lastMemberCountRenameAt);
-  if (!force && remaining > 0) {
-    if (!memberCountPendingTimer) {
-      memberCountPendingTimer = setTimeout(() => {
-        memberCountPendingTimer = null;
-        updateMemberCountChannel(true).catch((err) => console.error('MEMBER_COUNT_UPDATE_FAILED', err));
-      }, remaining);
-      memberCountPendingTimer.unref?.();
-    }
-    return;
+  if (memberCountChannel.parentId) {
+    memberCountChannel = await memberCountChannel.setParent(null, {
+      lockPermissions: false,
+      reason: 'Move Hangout below Staff as final top-level section'
+    });
   }
 
-  if (!(await acquireLock('member-count-channel', 60))) return;
-  try {
-    const freshGuild = await client.guilds.fetch(guildId);
-    guild.memberCount = freshGuild.memberCount;
-    const exactName = desiredMemberCountName();
-    if (memberCountChannel.name !== exactName) {
-      memberCountChannel = await memberCountChannel.setName(exactName, 'Keep exact live server member count visible');
-      lastMemberCountRenameAt = Date.now();
-      console.log('MEMBER_COUNT_CHANNEL ' + exactName);
-    }
-  } finally {
-    await releaseLock('member-count-channel');
+  if (memberCountChannel.name !== hangoutName) {
+    memberCountChannel = await memberCountChannel.setName(hangoutName, 'Rename member counter to public Hangout');
   }
-}
 
-function queueMemberCountUpdate() {
-  updateMemberCountChannel(false).catch((err) => console.error('MEMBER_COUNT_UPDATE_FAILED', err));
+  const staffCategory = [...guild.channels.cache.values()].find(
+    (c) => c.type === 4 && /staff/i.test(c.name)
+  );
+  const rootPositions = [...guild.channels.cache.values()]
+    .filter((c) => c.parentId == null && c.id !== memberCountChannel.id)
+    .map((c) => Number(c.rawPosition ?? c.position ?? 0));
+  const bottomPosition = Math.max(staffCategory ? Number(staffCategory.rawPosition ?? staffCategory.position ?? 0) : 0, ...rootPositions) + 1;
+  memberCountChannel = await memberCountChannel.setPosition(bottomPosition, { reason: 'Place Hangout below Staff at bottom of server' });
+
+  console.log('HANGOUT_CONFIGURED ' + JSON.stringify({
+    id: memberCountChannel.id,
+    name: memberCountChannel.name,
+    parentId: memberCountChannel.parentId,
+    position: memberCountChannel.rawPosition ?? memberCountChannel.position,
+    everyoneCanConnect: memberCountChannel.permissionsFor(guild.roles.everyone)?.has('Connect') ?? null
+  }));
 }
 
 async function resolveCreatorRole() {
@@ -576,7 +564,6 @@ client.once('clientReady', async () => {
   await loadSharedState();
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
-  console.log('CHANNEL_LAYOUT_DIAGNOSTIC ' + JSON.stringify([...guild.channels.cache.values()].map(c => ({id:c.id,name:c.name,type:c.type,parentId:c.parentId,position:c.rawPosition ?? c.position})).sort((a,b)=>(a.position??0)-(b.position??0))));
   await guild.roles.fetch();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
@@ -599,8 +586,8 @@ client.once('clientReady', async () => {
     }
   }
   if (!invitesChannel || !landingChannel) throw new Error('Could not find #invites and/or #join. Set their IDs in Render environment variables.');
-  if (!memberCountChannel) console.warn('Member count voice channel could not be resolved or created.');
-  else await lockMemberCountChannel();
+  if (!memberCountChannel) console.warn('Hangout voice channel could not be resolved.');
+  else await configureHangoutChannel();
   creatorRole = await resolveCreatorRole();
   if (!creatorRole) console.warn('NEW CREATOR role not resolved. Using screening + no-role fallback quality checks.');
   else console.log(`Quality role: ${creatorRole.name} (${creatorRole.id})`);
@@ -608,27 +595,22 @@ client.once('clientReady', async () => {
   await syncInviteCounters({ bootstrap: true });
   await updateLeaderboard(true);
   await qualitySweep();
-  await updateMemberCountChannel(true);
 
   refreshTimer = setInterval(() => syncInviteCounters().catch(console.error), cfg.pollMs);
   refreshTimer.unref();
   qualityTimer = setInterval(() => qualitySweep().catch(console.error), cfg.qualitySweepMs);
   qualityTimer.unref();
-  memberCountTimer = setInterval(() => updateMemberCountChannel(false).catch(console.error), 300000);
-  memberCountTimer.unref();
-  console.log(`READY ${client.user.tag} · ${guild.name} · live sync ${cfg.pollMs/1000}s · quality sweep ${cfg.qualitySweepMs/60000}m · exact member count enabled`);
+  console.log(`READY ${client.user.tag} · ${guild.name} · live sync ${cfg.pollMs/1000}s · quality sweep ${cfg.qualitySweepMs/60000}m · hangout enabled`);
   setTimeout(() => sweepCreatorRanksOnce().catch(console.error), 5000).unref?.();
 });
 
 client.on('guildMemberAdd', (member) => {
   if (member.guild.id !== guildId) return;
-  queueMemberCountUpdate();
   joinQueue = joinQueue.then(() => processJoin(member)).catch(console.error);
 });
 
 client.on('guildMemberRemove', (member) => {
   if (member.guild.id !== guildId) return;
-  queueMemberCountUpdate();
   revokeReferral(member.id, 'left server').catch(console.error);
 });
 
