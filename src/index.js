@@ -238,7 +238,7 @@ async function findChannel(id, name) {
 async function configureHangoutChannel() {
   if (!memberCountChannel) return;
 
-  const hangoutName = `🎙️ ${Number(guild?.memberCount || 0).toLocaleString('en-GB')}`;
+  const hangoutName = `🎙️ ${Number(guild?.memberCount || 0).toLocaleString('en-GB')} Members`;
 
   if (memberCountChannel.parentId) {
     memberCountChannel = await memberCountChannel.setParent(null, {
@@ -317,7 +317,7 @@ async function updateVoiceMemberCount(force = false) {
   const freshGuild = await client.guilds.fetch(guildId).catch(() => null);
   if (freshGuild) guild.memberCount = freshGuild.memberCount;
 
-  const wanted = `🎙️ ${Number(guild?.memberCount || 0).toLocaleString('en-GB')}`;
+  const wanted = `🎙️ ${Number(guild?.memberCount || 0).toLocaleString('en-GB')} Members`;
   if (memberCountChannel.name === wanted) return;
 
   const now = Date.now();
@@ -642,7 +642,7 @@ client.once('clientReady', async () => {
   memberCountChannel = await guild.channels.fetch('1572455999158231260').catch(() => null);
   if (!memberCountChannel) {
     memberCountChannel = [...guild.channels.cache.values()].find((c) =>
-      (c.type === 2 || c.type === 13) && (/^🎙️\s[\d,]+$/.test(c.name) || c.name === '🎙️ // 𝗛𝗔𝗡𝗚𝗢𝗨𝗧' || /^Members:/i.test(c.name))
+      (c.type === 2 || c.type === 13) && (/^🎙️\s[\d,]+(?:\sMembers)?$/.test(c.name) || c.name === '🎙️ // 𝗛𝗔𝗡𝗚𝗢𝗨𝗧' || /^Members:/i.test(c.name))
     ) || null;
   }
   if (!invitesChannel || !landingChannel) throw new Error('Could not find #invites and/or #join. Set their IDs in Render environment variables.');
