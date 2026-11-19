@@ -237,64 +237,27 @@ async function findChannel(id, name) {
 
 async function configureHangoutChannel() {
   if (!memberCountChannel) return;
+  const hangoutName = '🎙️ // 𝗛𝗔𝗡𝗚𝗢𝗨𝗧';
 
-  const categoryName = '🎙️ // 𝗛𝗔𝗡𝗚𝗢𝗨𝗧';
-  const voiceName = '🎙️｜hangout';
-
-  await memberCountChannel.permissionOverwrites.edit(
-    guild.roles.everyone,
-    { Connect: true },
-    { reason: 'Restore public access to Hangout voice channel' }
-  );
-
-  let hangoutCategory = [...guild.channels.cache.values()].find(
-    (c) => c.type === 4 && c.name === categoryName
-  );
-
-  if (!hangoutCategory) {
-    hangoutCategory = await guild.channels.create({
-      name: categoryName,
-      type: 4,
-      reason: 'Create Hangout section below Staff'
-    });
-  }
-
-  const staffCategory = [...guild.channels.cache.values()].find(
-    (c) => c.type === 4 && /staff/i.test(c.name)
-  );
-  const rootCategories = [...guild.channels.cache.values()].filter((c) => c.type === 4 && c.id !== hangoutCategory.id);
-  const bottomCategoryPosition = Math.max(
-    staffCategory ? Number(staffCategory.rawPosition ?? staffCategory.position ?? 0) : 0,
-    ...rootCategories.map((c) => Number(c.rawPosition ?? c.position ?? 0))
-  ) + 1;
-
-  hangoutCategory = await hangoutCategory.setPosition(bottomCategoryPosition, {
-    reason: 'Place Hangout section below Staff at bottom of server'
-  });
-
-  if (memberCountChannel.name !== voiceName) {
-    memberCountChannel = await memberCountChannel.setName(voiceName, 'Rename former member counter to Hangout voice');
-  }
-
-  if (memberCountChannel.parentId !== hangoutCategory.id) {
-    memberCountChannel = await memberCountChannel.setParent(hangoutCategory.id, {
+  if (memberCountChannel.parentId) {
+    memberCountChannel = await memberCountChannel.setParent(null, {
       lockPermissions: false,
-      reason: 'Place Hangout voice inside Hangout section'
+      reason: 'Keep Hangout as a standalone voice channel'
     });
   }
 
-  memberCountChannel = await memberCountChannel.setPosition(0, {
-    reason: 'Keep Hangout voice first in Hangout section'
-  });
+  if (memberCountChannel.name !== hangoutName) {
+    memberCountChannel = await memberCountChannel.setName(hangoutName, 'Rename former member counter to Hangout');
+  }
 
-  console.log('HANGOUT_CONFIGURED ' + JSON.stringify({
-    categoryId: hangoutCategory.id,
-    categoryName: hangoutCategory.name,
-    categoryPosition: hangoutCategory.rawPosition ?? hangoutCategory.position,
-    voiceId: memberCountChannel.id,
-    voiceName: memberCountChannel.name,
+  console.log('HANGOUT_CURRENT ' + JSON.stringify({
+    id: memberCountChannel.id,
+    name: memberCountChannel.name,
     parentId: memberCountChannel.parentId,
-    everyoneCanConnect: memberCountChannel.permissionsFor(guild.roles.everyone)?.has('Connect') ?? null
+    position: memberCountChannel.rawPosition ?? memberCountChannel.position,
+    overwrites: [...memberCountChannel.permissionOverwrites.cache.values()].map(o => ({
+      id:o.id,type:o.type,allow:o.allow.bitfield.toString(),deny:o.deny.bitfield.toString()
+    }))
   }));
 }
 
@@ -591,27 +554,25 @@ client.once('clientReady', async () => {
   await guild.roles.fetch();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
-  memberCountChannel = await guild.channels.fetch(cfg.memberCountChannelId).catch(() => null);
+  memberCountChannel = await guild.channels.fetch('1572455999158231260').catch(() => null);
   if (!memberCountChannel) {
     memberCountChannel = [...guild.channels.cache.values()].find((c) =>
-      (c.type === 2 || c.type === 13) && /^Members:/i.test(c.name)
+      (c.type === 2 || c.type === 13) && (c.name === '🎙️ // 𝗛𝗔𝗡𝗚𝗢𝗨𝗧' || /^Members:/i.test(c.name))
     ) || null;
-  }
-  if (!memberCountChannel) {
-    if (!guild.members.me.permissions.has('ManageChannels')) {
-      console.warn('Member count channel missing and bot lacks Manage Channels permission.');
-    } else {
-      memberCountChannel = await guild.channels.create({
-        name: desiredMemberCountName(),
-        type: 2,
-        reason: 'Create Fanvue live member count channel'
-      });
-      console.log('MEMBER_COUNT_CHANNEL_CREATED ' + memberCountChannel.id + ' ' + memberCountChannel.name);
-    }
   }
   if (!invitesChannel || !landingChannel) throw new Error('Could not find #invites and/or #join. Set their IDs in Render environment variables.');
   if (!memberCountChannel) console.warn('Hangout voice channel could not be resolved.');
   else await configureHangoutChannel();
+  const permissionRefs = [...guild.channels.cache.values()].filter(c =>
+    ['💬｜general', '💬 // HOME', '🌍 // COMMUNITY', '🔒 // STAFF', '✅｜join'].includes(c.name)
+  );
+  console.log('PERMISSION_REFERENCE ' + JSON.stringify(permissionRefs.map(c => ({
+    id:c.id,name:c.name,type:c.type,parentId:c.parentId,
+    overwrites:[...c.permissionOverwrites.cache.values()].map(o => ({
+      id:o.id,type:o.type,allow:o.allow.bitfield.toString(),deny:o.deny.bitfield.toString()
+    }))
+  }))));
+
   creatorRole = await resolveCreatorRole();
   if (!creatorRole) console.warn('NEW CREATOR role not resolved. Using screening + no-role fallback quality checks.');
   else console.log(`Quality role: ${creatorRole.name} (${creatorRole.id})`);
