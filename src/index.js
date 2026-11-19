@@ -112,12 +112,25 @@ function addCount(userId, n, wk = weekKey()) {
 function rollingSevenDayCounts(now = Date.now()) {
   const cutoff = Number(now) - (7 * 24 * 60 * 60 * 1000);
   const counts = {};
+
+  // Referral links are valid for 7 days, so any link created inside the
+  // rolling window can only contain invite uses from inside that window.
+  for (const link of Object.values(state.links || {})) {
+    const createdAt = Number(link.createdAt || 0);
+    if (!createdAt || createdAt < cutoff || createdAt > Number(now)) continue;
+    const uses = Math.max(0, Number(link.lastUses || 0));
+    if (!uses) continue;
+    counts[link.referrerId] = Number(counts[link.referrerId] || 0) + uses;
+  }
+
+  // Remove referrals that the quality system has explicitly revoked.
   for (const r of Object.values(state.referrals || {})) {
-    if (r.status !== 'counted') continue;
+    if (r.status !== 'revoked') continue;
     const joinedAt = Number(r.joinedAt || 0);
     if (!joinedAt || joinedAt < cutoff || joinedAt > Number(now)) continue;
-    counts[r.referrerId] = Number(counts[r.referrerId] || 0) + 1;
+    counts[r.referrerId] = Math.max(0, Number(counts[r.referrerId] || 0) - 1);
   }
+
   return counts;
 }
 
@@ -551,7 +564,6 @@ async function removeFiveMinuteTypingRequirement() {
 client.once('clientReady', async () => {
   guild = await client.guilds.fetch(guildId);
   await loadSharedState();
-  console.log('STATE_WEEK_SUMMARY ' + JSON.stringify({ weeks: state.weeks, names: state.names, links: Object.fromEntries(Object.entries(state.links || {}).map(([code, v]) => [code, { referrerId: v.referrerId, createdAt: v.createdAt, lastUses: v.lastUses }])) }));
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
   await guild.roles.fetch();
