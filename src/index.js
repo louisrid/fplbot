@@ -109,6 +109,18 @@ function addCount(userId, n, wk = weekKey()) {
   state.weeks[wk][userId] = Math.max(0, Number(state.weeks[wk][userId] || 0) + Number(n || 0));
 }
 
+function rollingSevenDayCounts(now = Date.now()) {
+  const cutoff = Number(now) - (7 * 24 * 60 * 60 * 1000);
+  const counts = {};
+  for (const r of Object.values(state.referrals || {})) {
+    if (r.status !== 'counted') continue;
+    const joinedAt = Number(r.joinedAt || 0);
+    if (!joinedAt || joinedAt < cutoff || joinedAt > Number(now)) continue;
+    counts[r.referrerId] = Number(counts[r.referrerId] || 0) + 1;
+  }
+  return counts;
+}
+
 function revokedByReferrer(userId, wk = weekKey()) {
   return Object.values(state.referrals).filter((r) => r.referrerId === userId && r.week === wk && r.status === 'revoked').length;
 }
@@ -322,8 +334,7 @@ async function recoverMappings(invites) {
 }
 
 async function leaderboardPayload() {
-  const wk = weekKey();
-  const rows = Object.entries(state.weeks[wk] || {}).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const rows = Object.entries(rollingSevenDayCounts()).sort((a, b) => b[1] - a[1]).slice(0, 5);
   const medals = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'];
   const labels = ['1ST', '2ND', '3RD', '4TH', '5TH'];
   const podium = (await Promise.all([0,1,2,3,4].map(async (i) => {
@@ -340,18 +351,18 @@ async function leaderboardPayload() {
     c.addSectionComponents(new SectionBuilder()
       .addTextDisplayComponents(
         new TextDisplayBuilder().setContent('# 💚 INVITE & EARN'),
-        new TextDisplayBuilder().setContent('Invite creators to the **Fanvue AI Creator Academy** and climb the live weekly leaderboard.')
+        new TextDisplayBuilder().setContent('Invite creators to the **Fanvue AI Creator Academy** and climb the live 7-day leaderboard.')
       )
       .setThumbnailAccessory(new ThumbnailBuilder().setURL(icon).setDescription('Fanvue AI Creator Academy'))
     );
   } else {
-    c.addTextDisplayComponents(new TextDisplayBuilder().setContent('# 💚 INVITE & EARN\nInvite creators to the **Fanvue AI Creator Academy** and climb the live weekly leaderboard.'));
+    c.addTextDisplayComponents(new TextDisplayBuilder().setContent('# 💚 INVITE & EARN\nInvite creators to the **Fanvue AI Creator Academy** and climb the live 7-day leaderboard.'));
   }
   c.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
   c.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`## 🏆 THIS WEEK\n${podium}`),
+    new TextDisplayBuilder().setContent(`## 🏆 LAST 7 DAYS\n${podium}`),
     new TextDisplayBuilder().setContent('**🎁 Top 5 each win a prize.**'),
-    new TextDisplayBuilder().setContent('*Counts immediately · low-quality or departed referrals can be auto-revoked · resets Monday 00:00 UK*')
+    new TextDisplayBuilder().setContent('*Rolling 7 days · counts immediately · low-quality or departed referrals can be auto-revoked*')
   );
   c.addSeparatorComponents(new SeparatorBuilder().setDivider(false).setSpacing(SeparatorSpacingSize.Small));
   c.addActionRowComponents(new ActionRowBuilder().addComponents(
@@ -489,14 +500,14 @@ async function syncInviteCounters({ bootstrap = false } = {}) {
     const invites = await guild.invites.fetch({ cache: false });
     if (bootstrap || Object.keys(state.links).length === 0) await recoverMappings(invites);
 
-    const before = JSON.stringify(state.weeks[weekKey()] || {});
+    const before = JSON.stringify(rollingSevenDayCounts());
     await rebuildWeeklyCountsFromDiscord(invites);
-    const after = JSON.stringify(state.weeks[weekKey()] || {});
+    const after = JSON.stringify(rollingSevenDayCounts());
     state.lastWeek = weekKey();
     await save();
 
     if (bootstrap || before !== after) {
-      console.log('LIVE_WEEK_COUNTS ' + JSON.stringify(state.weeks[weekKey()] || {}));
+      console.log('LIVE_7_DAY_COUNTS ' + after);
       await updateLeaderboard(true);
     }
   } finally {
