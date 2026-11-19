@@ -551,6 +551,7 @@ async function removeFiveMinuteTypingRequirement() {
 client.once('clientReady', async () => {
   guild = await client.guilds.fetch(guildId);
   await loadSharedState();
+  console.log('STATE_WEEK_SUMMARY ' + JSON.stringify({ weeks: state.weeks, names: state.names, links: Object.fromEntries(Object.entries(state.links || {}).map(([code, v]) => [code, { referrerId: v.referrerId, createdAt: v.createdAt, lastUses: v.lastUses }])) }));
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
   await guild.roles.fetch();
