@@ -237,7 +237,9 @@ async function findChannel(id, name) {
 
 async function configureHangoutChannel() {
   if (!memberCountChannel) return;
-  const hangoutName = '🎙️ // 𝗛𝗔𝗡𝗚𝗢𝗨𝗧';
+
+  const categoryName = '🎙️ // 𝗛𝗔𝗡𝗚𝗢𝗨𝗧';
+  const voiceName = '🎙️｜hangout';
 
   await memberCountChannel.permissionOverwrites.edit(
     guild.roles.everyone,
@@ -245,31 +247,53 @@ async function configureHangoutChannel() {
     { reason: 'Restore public access to Hangout voice channel' }
   );
 
-  if (memberCountChannel.parentId) {
-    memberCountChannel = await memberCountChannel.setParent(null, {
-      lockPermissions: false,
-      reason: 'Move Hangout below Staff as final top-level section'
-    });
-  }
+  let hangoutCategory = [...guild.channels.cache.values()].find(
+    (c) => c.type === 4 && c.name === categoryName
+  );
 
-  if (memberCountChannel.name !== hangoutName) {
-    memberCountChannel = await memberCountChannel.setName(hangoutName, 'Rename member counter to public Hangout');
+  if (!hangoutCategory) {
+    hangoutCategory = await guild.channels.create({
+      name: categoryName,
+      type: 4,
+      reason: 'Create Hangout section below Staff'
+    });
   }
 
   const staffCategory = [...guild.channels.cache.values()].find(
     (c) => c.type === 4 && /staff/i.test(c.name)
   );
-  const rootPositions = [...guild.channels.cache.values()]
-    .filter((c) => c.parentId == null && c.id !== memberCountChannel.id)
-    .map((c) => Number(c.rawPosition ?? c.position ?? 0));
-  const bottomPosition = Math.max(staffCategory ? Number(staffCategory.rawPosition ?? staffCategory.position ?? 0) : 0, ...rootPositions) + 1;
-  memberCountChannel = await memberCountChannel.setPosition(bottomPosition, { reason: 'Place Hangout below Staff at bottom of server' });
+  const rootCategories = [...guild.channels.cache.values()].filter((c) => c.type === 4 && c.id !== hangoutCategory.id);
+  const bottomCategoryPosition = Math.max(
+    staffCategory ? Number(staffCategory.rawPosition ?? staffCategory.position ?? 0) : 0,
+    ...rootCategories.map((c) => Number(c.rawPosition ?? c.position ?? 0))
+  ) + 1;
+
+  hangoutCategory = await hangoutCategory.setPosition(bottomCategoryPosition, {
+    reason: 'Place Hangout section below Staff at bottom of server'
+  });
+
+  if (memberCountChannel.name !== voiceName) {
+    memberCountChannel = await memberCountChannel.setName(voiceName, 'Rename former member counter to Hangout voice');
+  }
+
+  if (memberCountChannel.parentId !== hangoutCategory.id) {
+    memberCountChannel = await memberCountChannel.setParent(hangoutCategory.id, {
+      lockPermissions: false,
+      reason: 'Place Hangout voice inside Hangout section'
+    });
+  }
+
+  memberCountChannel = await memberCountChannel.setPosition(0, {
+    reason: 'Keep Hangout voice first in Hangout section'
+  });
 
   console.log('HANGOUT_CONFIGURED ' + JSON.stringify({
-    id: memberCountChannel.id,
-    name: memberCountChannel.name,
+    categoryId: hangoutCategory.id,
+    categoryName: hangoutCategory.name,
+    categoryPosition: hangoutCategory.rawPosition ?? hangoutCategory.position,
+    voiceId: memberCountChannel.id,
+    voiceName: memberCountChannel.name,
     parentId: memberCountChannel.parentId,
-    position: memberCountChannel.rawPosition ?? memberCountChannel.position,
     everyoneCanConnect: memberCountChannel.permissionsFor(guild.roles.everyone)?.has('Connect') ?? null
   }));
 }
