@@ -576,6 +576,7 @@ client.once('clientReady', async () => {
   await loadSharedState();
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
+  console.log('CHANNEL_LAYOUT_DIAGNOSTIC ' + JSON.stringify([...guild.channels.cache.values()].map(c => ({id:c.id,name:c.name,type:c.type,parentId:c.parentId,position:c.rawPosition ?? c.position})).sort((a,b)=>(a.position??0)-(b.position??0))));
   await guild.roles.fetch();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
