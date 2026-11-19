@@ -174,9 +174,6 @@ let guild, invitesChannel, landingChannel, creatorRole, memberCountChannel;
 let syncing = false;
 let refreshTimer = null;
 let qualityTimer = null;
-let memberCountTimer = null;
-let memberCountPendingTimer = null;
-let lastMemberCountRenameAt = 0;
 let joinQueue = Promise.resolve();
 
 
@@ -237,27 +234,68 @@ async function findChannel(id, name) {
 
 async function configureHangoutChannel() {
   if (!memberCountChannel) return;
+
   const hangoutName = '🎙️ // 𝗛𝗔𝗡𝗚𝗢𝗨𝗧';
 
   if (memberCountChannel.parentId) {
     memberCountChannel = await memberCountChannel.setParent(null, {
       lockPermissions: false,
-      reason: 'Keep Hangout as a standalone voice channel'
+      reason: 'Keep Hangout as standalone top-level voice channel'
     });
   }
 
   if (memberCountChannel.name !== hangoutName) {
-    memberCountChannel = await memberCountChannel.setName(hangoutName, 'Rename former member counter to Hangout');
+    memberCountChannel = await memberCountChannel.setName(
+      hangoutName,
+      'Rename former member counter to Hangout'
+    );
   }
 
-  console.log('HANGOUT_CURRENT ' + JSON.stringify({
+  // Match the normal post-verification visibility model used by #general:
+  // @everyone cannot see/join; any role/user explicitly allowed to view #general
+  // can see and join Hangout.
+  const general = guild.channels.cache.get('1427337799451021521')
+    || [...guild.channels.cache.values()].find((c) => c.name === '💬｜general');
+
+  if (!general) throw new Error('Could not resolve #general for Hangout permission sync');
+
+  const permissionEntries = [
+    {
+      id: guild.roles.everyone.id,
+      deny: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect],
+    },
+  ];
+
+  for (const overwrite of general.permissionOverwrites.cache.values()) {
+    if (overwrite.id === guild.roles.everyone.id) continue;
+
+    const canView = overwrite.allow.has(PermissionsBitField.Flags.ViewChannel);
+    if (!canView) continue;
+
+    permissionEntries.push({
+      id: overwrite.id,
+      type: overwrite.type,
+      allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect],
+    });
+  }
+
+  await memberCountChannel.permissionOverwrites.set(
+    permissionEntries,
+    'Match Hangout visibility to verified #general access'
+  );
+
+  memberCountChannel = await memberCountChannel.setPosition(0, {
+    reason: 'Keep Hangout as top standalone voice channel'
+  });
+
+  console.log('HANGOUT_CONFIGURED ' + JSON.stringify({
     id: memberCountChannel.id,
     name: memberCountChannel.name,
     parentId: memberCountChannel.parentId,
     position: memberCountChannel.rawPosition ?? memberCountChannel.position,
-    overwrites: [...memberCountChannel.permissionOverwrites.cache.values()].map(o => ({
-      id:o.id,type:o.type,allow:o.allow.bitfield.toString(),deny:o.deny.bitfield.toString()
-    }))
+    everyoneView: memberCountChannel.permissionsFor(guild.roles.everyone)?.has(PermissionsBitField.Flags.ViewChannel) ?? null,
+    everyoneConnect: memberCountChannel.permissionsFor(guild.roles.everyone)?.has(PermissionsBitField.Flags.Connect) ?? null,
+    syncedFromGeneral: general.id
   }));
 }
 
@@ -563,16 +601,6 @@ client.once('clientReady', async () => {
   if (!invitesChannel || !landingChannel) throw new Error('Could not find #invites and/or #join. Set their IDs in Render environment variables.');
   if (!memberCountChannel) console.warn('Hangout voice channel could not be resolved.');
   else await configureHangoutChannel();
-  const permissionRefs = [...guild.channels.cache.values()].filter(c =>
-    ['💬｜general', '💬 // HOME', '🌍 // COMMUNITY', '🔒 // STAFF', '✅｜join'].includes(c.name)
-  );
-  console.log('PERMISSION_REFERENCE ' + JSON.stringify(permissionRefs.map(c => ({
-    id:c.id,name:c.name,type:c.type,parentId:c.parentId,
-    overwrites:[...c.permissionOverwrites.cache.values()].map(o => ({
-      id:o.id,type:o.type,allow:o.allow.bitfield.toString(),deny:o.deny.bitfield.toString()
-    }))
-  }))));
-
   creatorRole = await resolveCreatorRole();
   if (!creatorRole) console.warn('NEW CREATOR role not resolved. Using screening + no-role fallback quality checks.');
   else console.log(`Quality role: ${creatorRole.name} (${creatorRole.id})`);
