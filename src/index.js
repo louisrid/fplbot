@@ -348,114 +348,8 @@ async function configureCreationsPolicy() {
 }
 
 
-async function auditCommunityChannels() {
-  const creations = [...guild.channels.cache.values()].find((ch) => ch.isTextBased?.() && norm(ch.name) === 'creations') || null;
-  const general = generalChannel || guild.channels.cache.get('1427337799451021521') || null;
-  const memberRoleIds = [
-    '1499030714341920783', // Fanvue Academy
-    '1430978118717538346', // New Creator
-    '1430998244233838763', // Silver
-    '1430998282510929930', // Gold
-    '1430998390690414592', // Diamond
-    '1539309205364805662', // Elite
-    '1431000324864348210', // Legendary
-  ].filter((id) => guild.roles.cache.has(id));
-
-  const effective = (channel, roleId) => {
-    const role = guild.roles.cache.get(roleId);
-    const p = role && channel?.permissionsFor(role);
-    if (!p) return null;
-    return {
-      roleId,
-      roleName: role.name,
-      view: p.has(PermissionsBitField.Flags.ViewChannel),
-      send: p.has(PermissionsBitField.Flags.SendMessages),
-      attach: p.has(PermissionsBitField.Flags.AttachFiles),
-      createPublicThreads: p.has(PermissionsBitField.Flags.CreatePublicThreads),
-      createPrivateThreads: p.has(PermissionsBitField.Flags.CreatePrivateThreads),
-      sendInThreads: p.has(PermissionsBitField.Flags.SendMessagesInThreads),
-    };
-  };
-
-  const relevantOverwrites = (channel) => channel ? [...channel.permissionOverwrites.cache.values()]
-    .map((o) => ({
-      id: o.id,
-      type: o.type,
-      allow: [
-        ['SendMessages', PermissionsBitField.Flags.SendMessages],
-        ['AttachFiles', PermissionsBitField.Flags.AttachFiles],
-        ['CreatePublicThreads', PermissionsBitField.Flags.CreatePublicThreads],
-        ['CreatePrivateThreads', PermissionsBitField.Flags.CreatePrivateThreads],
-        ['SendMessagesInThreads', PermissionsBitField.Flags.SendMessagesInThreads],
-      ].filter(([,flag]) => o.allow.has(flag)).map(([name]) => name),
-      deny: [
-        ['SendMessages', PermissionsBitField.Flags.SendMessages],
-        ['AttachFiles', PermissionsBitField.Flags.AttachFiles],
-        ['CreatePublicThreads', PermissionsBitField.Flags.CreatePublicThreads],
-        ['CreatePrivateThreads', PermissionsBitField.Flags.CreatePrivateThreads],
-        ['SendMessagesInThreads', PermissionsBitField.Flags.SendMessagesInThreads],
-      ].filter(([,flag]) => o.deny.has(flag)).map(([name]) => name),
-    }))
-    .filter((o) => o.allow.length || o.deny.length) : [];
-
-  console.log('COMMUNITY_CHANNEL_AUDIT ' + JSON.stringify({
-    general: general ? {
-      id: general.id,
-      parentId: general.parentId,
-      roles: memberRoleIds.map((id) => effective(general, id)).filter(Boolean),
-      overwrites: relevantOverwrites(general),
-    } : null,
-    creations: creations ? {
-      id: creations.id,
-      parentId: creations.parentId,
-      roles: memberRoleIds.map((id) => effective(creations, id)).filter(Boolean),
-      overwrites: relevantOverwrites(creations),
-    } : null,
-    redisBackedState: Boolean(redis),
-    courseClicks: Number(state.courseClicks || 0),
-    lastCourseClickAt: state.lastCourseClickAt || null,
-  }));
-}
 
 
-async function auditOrdinaryMemberExperience() {
-  try {
-    const members = await guild.members.fetch();
-    const verifiedRoleId = '1430978118717538346'; // NEW CREATOR
-    const staffIds = new Set(['1427337798129680523', '1447969609176318042']);
-    const sample = [...members.values()].find((m) =>
-      !m.user?.bot &&
-      m.roles.cache.has(verifiedRoleId) &&
-      ![...staffIds].some((id) => m.roles.cache.has(id))
-    ) || null;
-
-    const creations = [...guild.channels.cache.values()].find((ch) => ch.isTextBased?.() && norm(ch.name) === 'creations') || null;
-    const flags = (channel) => {
-      const p = sample && channel?.permissionsFor(sample);
-      if (!p) return null;
-      return {
-        view: p.has(PermissionsBitField.Flags.ViewChannel),
-        send: p.has(PermissionsBitField.Flags.SendMessages),
-        attach: p.has(PermissionsBitField.Flags.AttachFiles),
-        createPublicThreads: p.has(PermissionsBitField.Flags.CreatePublicThreads),
-        createPrivateThreads: p.has(PermissionsBitField.Flags.CreatePrivateThreads),
-        sendInThreads: p.has(PermissionsBitField.Flags.SendMessagesInThreads),
-      };
-    };
-
-    const verifiedRole = guild.roles.cache.get(verifiedRoleId);
-    console.log('ORDINARY_MEMBER_EXPERIENCE ' + JSON.stringify({
-      sampleFound: Boolean(sample),
-      sampleRoleCount: sample?.roles.cache.size || 0,
-      sampleRoleManaged: verifiedRole?.managed ?? null,
-      sampleRoleAdministrator: verifiedRole?.permissions.has(PermissionsBitField.Flags.Administrator) ?? null,
-      general: flags(generalChannel),
-      creations: flags(creations),
-    }));
-  } catch (err) {
-    console.error('ORDINARY_MEMBER_EXPERIENCE_FAILED', err?.message || err);
-  }
-}
 
 
 async function configureHangoutChannel() {
@@ -1004,8 +898,6 @@ client.once('clientReady', async () => {
   await syncServerRules();
   await configureGeneralMediaPolicy();
   await configureCreationsPolicy();
-  await auditCommunityChannels();
-  await auditOrdinaryMemberExperience();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
   memberCountChannel = await guild.channels.fetch('1572455999158231260').catch(() => null);
