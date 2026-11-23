@@ -267,86 +267,6 @@ async function configureGeneralMediaPolicy() {
   }));
 }
 
-async function restoreCreationsChannelOnce() {
-  const creations = [...guild.channels.cache.values()].find((ch) =>
-    ch.isTextBased?.() && norm(ch.name) === 'creations'
-  ) || null;
-
-  if (!creations) {
-    console.warn('CREATIONS_CHANNEL_NOT_FOUND_FOR_RESTORE');
-    return;
-  }
-
-  // Delete only discussion threads created by this bot under #creations.
-  const active = await guild.channels.fetchActiveThreads().catch(() => null);
-  let deletedThreads = 0;
-  if (active?.threads) {
-    for (const thread of active.threads.values()) {
-      if (thread.parentId !== creations.id || thread.ownerId !== client.user.id) continue;
-      await thread.delete('Restore #creations to its pre-thread behaviour').catch(() => null);
-      deletedThreads++;
-    }
-  }
-
-  // Remove only the explicit permission values this rollout added, so the
-  // channel goes back to its inherited/pre-existing permission behaviour.
-  const creatorReset = {
-    ViewChannel: null,
-    SendMessages: null,
-    AttachFiles: null,
-    EmbedLinks: null,
-    AddReactions: null,
-    ReadMessageHistory: null,
-    SendMessagesInThreads: null,
-    CreatePublicThreads: null,
-    CreatePrivateThreads: null,
-  };
-  for (const roleId of CREATOR_RANK_IDS) {
-    if (!guild.roles.cache.has(roleId)) continue;
-    await creations.permissionOverwrites.edit(roleId, creatorReset, {
-      reason: 'Restore #creations permissions to pre-thread behaviour'
-    });
-  }
-
-  const staffReset = {
-    ViewChannel: null,
-    SendMessages: null,
-    AttachFiles: null,
-    EmbedLinks: null,
-    AddReactions: null,
-    ReadMessageHistory: null,
-    CreatePublicThreads: null,
-    CreatePrivateThreads: null,
-    SendMessagesInThreads: null,
-    ManageMessages: null,
-    ManageThreads: null,
-  };
-  for (const roleId of ['1447969609176318042', '1427337798129680523']) {
-    if (!guild.roles.cache.has(roleId)) continue;
-    await creations.permissionOverwrites.edit(roleId, staffReset, {
-      reason: 'Restore #creations staff permissions to inherited/pre-existing behaviour'
-    });
-  }
-
-  if (guild.members.me) {
-    await creations.permissionOverwrites.edit(guild.members.me.id, {
-      ViewChannel: null,
-      SendMessages: null,
-      ReadMessageHistory: null,
-      CreatePublicThreads: null,
-      SendMessagesInThreads: null,
-      ManageThreads: null,
-    }, { reason: 'Remove temporary Fanvue thread permissions from #creations' });
-  }
-
-  console.log('CREATIONS_RESTORED ' + JSON.stringify({
-    id: creations.id,
-    name: creations.name,
-    deletedBotThreads: deletedThreads
-  }));
-}
-
-
 async function configureHangoutChannel() {
   if (!memberCountChannel) return;
 
@@ -754,7 +674,6 @@ client.once('clientReady', async () => {
   await guild.channels.fetch();
   await guild.roles.fetch();
   await configureGeneralMediaPolicy();
-  await restoreCreationsChannelOnce();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
   memberCountChannel = await guild.channels.fetch('1572455999158231260').catch(() => null);
