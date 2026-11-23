@@ -252,17 +252,51 @@ async function configureGeneralMediaPolicy() {
     return;
   }
 
+  const staffRoleIds = new Set(['1447969609176318042', '1427337798129680523']);
+
+  // One clean channel-wide rule: ordinary members cannot upload files/media in #general.
+  await generalChannel.permissionOverwrites.edit(guild.roles.everyone.id, {
+    AttachFiles: false,
+  }, { reason: 'Keep #general text-first: block member file and media uploads' });
+
+  // Staff remain able to upload when moderation or support needs it.
+  for (const roleId of staffRoleIds) {
+    if (!guild.roles.cache.has(roleId)) continue;
+    await generalChannel.permissionOverwrites.edit(roleId, {
+      AttachFiles: true,
+    }, { reason: 'Allow staff file uploads in #general' });
+  }
+
+  // Clean up the temporary per-rank denies from the earlier rollout.
   for (const roleId of CREATOR_RANK_IDS) {
     if (!guild.roles.cache.has(roleId)) continue;
     await generalChannel.permissionOverwrites.edit(roleId, {
-      AttachFiles: false,
-    }, { reason: 'Keep #general text-first and route member media to creator channels' });
+      AttachFiles: null,
+    }, { reason: 'Use the single @everyone media rule for #general' });
+  }
+
+  // Remove any old explicit member-role/user allows that could bypass the channel-wide block.
+  for (const overwrite of [...generalChannel.permissionOverwrites.cache.values()]) {
+    if (overwrite.id === guild.roles.everyone.id || staffRoleIds.has(overwrite.id)) continue;
+    if (!overwrite.allow.has(PermissionsBitField.Flags.AttachFiles)) continue;
+
+    if (overwrite.type === 0) {
+      const role = guild.roles.cache.get(overwrite.id);
+      if (role?.managed) continue;
+    }
+
+    await generalChannel.permissionOverwrites.edit(overwrite.id, {
+      AttachFiles: null,
+    }, { reason: 'Prevent non-staff #general upload bypass' });
   }
 
   console.log('GENERAL_MEDIA_POLICY ' + JSON.stringify({
     id: generalChannel.id,
     name: generalChannel.name,
-    creatorAttachmentsBlocked: true,
+    everyoneAttachFiles: generalChannel.permissionOverwrites.cache.get(guild.roles.everyone.id)?.deny.has(PermissionsBitField.Flags.AttachFiles) === true,
+    staffAttachFilesAllowed: [...staffRoleIds].filter((id) => guild.roles.cache.has(id)).every((id) =>
+      generalChannel.permissionsFor(guild.roles.cache.get(id))?.has(PermissionsBitField.Flags.AttachFiles)
+    ),
     explicitContentFilter: guild.explicitContentFilter
   }));
 }
