@@ -767,6 +767,42 @@ async function syncServerRules() {
 }
 
 
+async function inspectFreeCourseOnce() {
+  const ch = guild.channels.cache.get('1538918064773537874');
+  if (!ch?.isTextBased?.()) {
+    console.warn('FREE_COURSE_CHANNEL_NOT_FOUND');
+    return;
+  }
+  const recent = await ch.messages.fetch({ limit: 25 }).catch(() => null);
+  if (!recent) return;
+  console.log('FREE_COURSE_INSPECT ' + JSON.stringify({
+    channelId: ch.id,
+    channelName: ch.name,
+    rows: [...recent.values()].map((m) => ({
+      id: m.id,
+      authorId: m.author?.id || null,
+      authorTag: m.author?.tag || null,
+      bot: Boolean(m.author?.bot),
+      webhookId: m.webhookId || null,
+      content: String(m.content || '').slice(0, 6000),
+      embeds: m.embeds.map((e) => ({
+        title: e.title || null,
+        description: String(e.description || '').slice(0, 6000),
+        url: e.url || null,
+        fields: (e.fields || []).map((x) => ({ name: x.name, value: String(x.value || '').slice(0, 3000) }))
+      })),
+      components: m.components.map((row) => row.components.map((x) => ({
+        type: x.type,
+        customId: x.customId || null,
+        label: x.label || null,
+        url: x.url || null,
+        style: x.style || null
+      })))
+    }))
+  }));
+}
+
+
 async function removeFiveMinuteTypingRequirement() {
   if (guild.verificationLevel === 2) {
     await guild.setVerificationLevel(1, 'Remove 5-minute account-age typing requirement; retain verified-email requirement');
@@ -786,6 +822,7 @@ client.once('clientReady', async () => {
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
   await guild.roles.fetch();
+  await inspectFreeCourseOnce();
   await syncServerRules();
   await configureGeneralMediaPolicy();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
