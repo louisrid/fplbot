@@ -289,6 +289,37 @@ async function configureCommunityMediaChannels() {
     }, { reason: 'Allow Fanvue bot to create and manage creation discussion threads' });
   }
 
+  const auditRoleIds = [
+    ...CREATOR_RANK_IDS,
+    '1447969609176318042', // MOD
+    '1427337798129680523', // ADMIN
+  ];
+
+  const effective = auditRoleIds.map((roleId) => {
+    const role = guild.roles.cache.get(roleId);
+    if (!role) return null;
+    const generalPerms = generalChannel?.permissionsFor(role);
+    const creationsPerms = creationsChannel?.permissionsFor(role);
+    return {
+      id: role.id,
+      name: role.name,
+      general: generalPerms ? {
+        view: generalPerms.has(PermissionsBitField.Flags.ViewChannel),
+        send: generalPerms.has(PermissionsBitField.Flags.SendMessages),
+        attach: generalPerms.has(PermissionsBitField.Flags.AttachFiles),
+      } : null,
+      creations: creationsPerms ? {
+        view: creationsPerms.has(PermissionsBitField.Flags.ViewChannel),
+        send: creationsPerms.has(PermissionsBitField.Flags.SendMessages),
+        attach: creationsPerms.has(PermissionsBitField.Flags.AttachFiles),
+        react: creationsPerms.has(PermissionsBitField.Flags.AddReactions),
+        createPublicThreads: creationsPerms.has(PermissionsBitField.Flags.CreatePublicThreads),
+        createPrivateThreads: creationsPerms.has(PermissionsBitField.Flags.CreatePrivateThreads),
+        sendInThreads: creationsPerms.has(PermissionsBitField.Flags.SendMessagesInThreads),
+      } : null,
+    };
+  }).filter(Boolean);
+
   console.log('COMMUNITY_MEDIA_CONFIG ' + JSON.stringify({
     explicitContentFilter: guild.explicitContentFilter,
     general: generalChannel ? {
@@ -303,7 +334,8 @@ async function configureCommunityMediaChannels() {
       memberThreadCreationBlocked: true,
       memberThreadRepliesAllowed: true,
       autoThreadsEnabled: process.env.CREATIONS_THREADS_ENABLED === 'true'
-    } : null
+    } : null,
+    effective
   }));
 }
 
