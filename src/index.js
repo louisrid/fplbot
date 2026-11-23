@@ -720,6 +720,14 @@ async function inspectRulesChannelOnce() {
       rows
     }));
   }
+
+  console.log('DISCORD_TEXT_CHANNEL_INDEX ' + JSON.stringify({
+    guildRulesChannelId: guild.rulesChannelId || null,
+    publicUpdatesChannelId: guild.publicUpdatesChannelId || null,
+    channels: [...guild.channels.cache.values()]
+      .filter((ch) => ch.isTextBased?.())
+      .map((ch) => ({ id: ch.id, name: ch.name, parentId: ch.parentId || null }))
+  }));
 }
 
 
