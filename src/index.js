@@ -966,29 +966,113 @@ async function syncToolsMessage() {
 }
 
 
-async function inspectSupportPanelsOnce() {
-  const channels = [...guild.channels.cache.values()].filter((ch) =>
-    ch.isTextBased?.() && /support|ticket|help/i.test(norm(ch.name))
+const SUPPORT_CHANNEL_ID = '1539322745815437475';
+const OLD_SUPPORT_INFO_MESSAGE_ID = '1557469053487022110';
+const TICKET_TOOL_PANEL_ID = '1539448848164851745';
+const SUPPORT_INFO_MARKER = 'SUPPORT';
+
+function supportInfoPayload() {
+  const card = new ContainerBuilder().setAccentColor(0x75FB4C);
+  const icon = guild.iconURL({ size: 128 });
+
+  if (icon) {
+    card.addSectionComponents(
+      new SectionBuilder()
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent('# 🆘 SUPPORT'),
+          new TextDisplayBuilder().setContent('Need help with the Academy or your Fanvue creator setup?')
+        )
+        .setThumbnailAccessory(
+          new ThumbnailBuilder()
+            .setURL(icon)
+            .setDescription('Fanvue AI Creator Academy')
+        )
+    );
+  } else {
+    card.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('# 🆘 SUPPORT\nNeed help with the Academy or your Fanvue creator setup?')
+    );
+  }
+
+  card.addSeparatorComponents(
+    new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small)
   );
 
-  for (const ch of channels) {
-    const recent = await ch.messages.fetch({ limit: 30 }).catch(() => null);
-    if (!recent) continue;
-    console.log('SUPPORT_CHANNEL_INSPECT ' + JSON.stringify({
-      id: ch.id,
-      name: ch.name,
-      parentId: ch.parentId || null,
-      rows: [...recent.values()].map((m) => ({
-        id: m.id,
-        authorId: m.author?.id || null,
-        authorTag: m.author?.tag || null,
-        bot: Boolean(m.author?.bot),
-        pinned: Boolean(m.pinned),
-        flags: m.flags?.bitfield?.toString?.() || null,
-        raw: m.toJSON()
-      }))
-    }));
+  card.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent('Use the **support button below** to open a private ticket.'),
+    new TextDisplayBuilder().setContent('Our support assistant may reply first. A staff member can step in when needed.'),
+    new TextDisplayBuilder().setContent('Please include the key details or screenshots so we can help faster.')
+  );
+
+  return {
+    flags: MessageFlags.IsComponentsV2,
+    components: [card],
+    allowedMentions: { parse: [] }
+  };
+}
+
+async function syncSupportInfoPanel() {
+  const ch = guild.channels.cache.get(SUPPORT_CHANNEL_ID) || await guild.channels.fetch(SUPPORT_CHANNEL_ID).catch(() => null);
+  if (!ch?.isTextBased?.()) {
+    console.warn('SUPPORT_CHANNEL_NOT_FOUND');
+    return;
   }
+
+  const recent = await ch.messages.fetch({ limit: 25 }).catch(() => null);
+  let info = recent
+    ? [...recent.values()].find((m) =>
+        m.author?.id === client.user.id &&
+        JSON.stringify(m.components || []).includes(SUPPORT_INFO_MARKER)
+      )
+    : null;
+
+  if (info) {
+    await info.edit(supportInfoPayload());
+  } else {
+    info = await ch.send(supportInfoPayload());
+  }
+
+  // Keep the Ticket Tool panel untouched. It remains the single functional
+  // button for opening support tickets.
+  const ticketPanel = await ch.messages.fetch(TICKET_TOOL_PANEL_ID).catch(() => null);
+
+  const oldInfo = await ch.messages.fetch(OLD_SUPPORT_INFO_MESSAGE_ID).catch(() => null);
+  if (oldInfo && oldInfo.id !== info.id) {
+    let temporaryManageMessages = false;
+    let canManage = ch.permissionsFor(guild.members.me)?.has(PermissionsBitField.Flags.ManageMessages) === true;
+
+    if (!canManage) {
+      try {
+        await ch.permissionOverwrites.edit(guild.members.me.id, {
+          ManageMessages: true,
+        }, { reason: 'Temporarily replace old support info message' });
+        temporaryManageMessages = true;
+        canManage = ch.permissionsFor(guild.members.me)?.has(PermissionsBitField.Flags.ManageMessages) === true;
+      } catch (err) {
+        console.warn('SUPPORT_TEMP_MANAGE_MESSAGES_FAILED', err?.message || err);
+      }
+    }
+
+    if (canManage) {
+      await oldInfo.delete().catch((err) => console.warn('OLD_SUPPORT_INFO_DELETE_FAILED', err?.message || err));
+    }
+
+    if (temporaryManageMessages) {
+      await ch.permissionOverwrites.edit(guild.members.me.id, {
+        ManageMessages: null,
+      }, { reason: 'Remove temporary support cleanup permission' }).catch((err) =>
+        console.warn('SUPPORT_TEMP_PERMISSION_CLEANUP_FAILED', err?.message || err)
+      );
+    }
+  }
+
+  console.log('SUPPORT_INFO_PANEL_CURRENT ' + JSON.stringify({
+    channelId: ch.id,
+    infoMessageId: info.id,
+    oldInfoRemoved: !(await ch.messages.fetch(OLD_SUPPORT_INFO_MESSAGE_ID).catch(() => null)),
+    ticketPanelPreserved: Boolean(ticketPanel),
+    infoPanelHasButtons: false
+  }));
 }
 
 
@@ -1011,7 +1095,7 @@ client.once('clientReady', async () => {
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
   await guild.roles.fetch();
-  await inspectSupportPanelsOnce();
+  await syncSupportInfoPanel();
   await syncToolsMessage();
   await ensureTrackedFreeCourseButton();
   await syncMemberVerificationRules();
