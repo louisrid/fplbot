@@ -859,12 +859,12 @@ client.on('interactionCreate', async (i) => {
       ]);
       const eligible = member && member.roles.cache.some((role) => eligibleRoleIds.has(role.id));
       if (!eligible) {
-        await i.reply({ content: 'This invite programme is available to Academy creators.', ephemeral: true });
+        await i.reply({ content: 'This invite programme is available to Academy creators.', flags: MessageFlags.Ephemeral });
         return;
       }
     }
     if (i.customId === 'ref:get') {
-      await i.deferReply({ ephemeral: true });
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
       const url = await getOrCreateLink(i.user);
       const n = weekCount(i.user.id);
       await i.editReply(`🔗 **Your personal Academy invite**\n${url}\n\n**This week:** ${n} invite${n === 1 ? '' : 's'}`);
@@ -879,12 +879,12 @@ client.on('interactionCreate', async (i) => {
       return;
     }
     if (i.customId === 'ref:rewards') {
-      await i.reply({ content: '🎁 **Rewards coming soon.**\nInvites count immediately, with low-quality referrals automatically removable.', ephemeral: true });
+      await i.reply({ content: '🎁 **Rewards coming soon.**\nInvites count immediately, with low-quality referrals automatically removable.', flags: MessageFlags.Ephemeral });
     }
   } catch (err) {
     console.error(err);
     const msg = 'Something went wrong. Staff can check the bot logs.';
-    if (i.deferred || i.replied) await i.editReply(msg).catch(() => {}); else await i.reply({ content: msg, ephemeral: true }).catch(() => {});
+    if (i.deferred || i.replied) await i.editReply(msg).catch(() => {}); else await i.reply({ content: msg, flags: MessageFlags.Ephemeral }).catch(() => {});
   }
 });
 
