@@ -278,6 +278,25 @@ async function configureCommunityMediaChannels() {
     }
   }
 
+  if (creationsChannel) {
+    for (const staffRoleId of ['1447969609176318042', '1427337798129680523']) {
+      if (!guild.roles.cache.has(staffRoleId)) continue;
+      await creationsChannel.permissionOverwrites.edit(staffRoleId, {
+        ViewChannel: true,
+        SendMessages: true,
+        AttachFiles: true,
+        EmbedLinks: true,
+        AddReactions: true,
+        ReadMessageHistory: true,
+        CreatePublicThreads: true,
+        CreatePrivateThreads: true,
+        SendMessagesInThreads: true,
+        ManageMessages: true,
+        ManageThreads: true,
+      }, { reason: 'Ensure MOD and ADMIN can fully moderate #creations and its threads' });
+    }
+  }
+
   if (creationsChannel && guild.members.me) {
     await creationsChannel.permissionOverwrites.edit(guild.members.me.id, {
       ViewChannel: true,
