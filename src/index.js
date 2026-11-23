@@ -980,7 +980,7 @@ function supportInfoPayload() {
       new SectionBuilder()
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent('# 🆘 SUPPORT'),
-          new TextDisplayBuilder().setContent('Need help with the Academy or your Fanvue creator setup?')
+          new TextDisplayBuilder().setContent('Private help for the Academy, Fanvue & your creator setup.')
         )
         .setThumbnailAccessory(
           new ThumbnailBuilder()
@@ -990,7 +990,7 @@ function supportInfoPayload() {
     );
   } else {
     card.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent('# 🆘 SUPPORT\nNeed help with the Academy or your Fanvue creator setup?')
+      new TextDisplayBuilder().setContent('# 🆘 SUPPORT\nPrivate help for the Academy, Fanvue & your creator setup.')
     );
   }
 
@@ -999,8 +999,8 @@ function supportInfoPayload() {
   );
 
   card.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent('Use the **support button above** to open a private ticket.'),
-    new TextDisplayBuilder().setContent('Add the key details or screenshots so we can help faster.')
+    new TextDisplayBuilder().setContent('## OPEN A SUPPORT TICKET'),
+    new TextDisplayBuilder().setContent('Use the **ticket button above** and include the key details or screenshots.')
   );
 
   return {
