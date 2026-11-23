@@ -692,6 +692,30 @@ async function inspectMemberVerificationOnce() {
   try {
     const data = await client.rest.get(`/guilds/${guild.id}/member-verification`);
     console.log('MEMBER_VERIFICATION_INSPECT ' + JSON.stringify(data));
+
+    for (const channelId of ['1427337799451021519', '1427337799451021516']) {
+      const ch = guild.channels.cache.get(channelId);
+      if (!ch?.isTextBased?.()) continue;
+      const recent = await ch.messages.fetch({ limit: 25 }).catch(() => null);
+      if (!recent) continue;
+      console.log('INFO_RULES_MESSAGES ' + JSON.stringify({
+        id: ch.id,
+        name: ch.name,
+        rows: [...recent.values()].map((m) => ({
+          id: m.id,
+          authorId: m.author?.id || null,
+          authorTag: m.author?.tag || null,
+          bot: Boolean(m.author?.bot),
+          pinned: Boolean(m.pinned),
+          content: String(m.content || '').slice(0, 5000),
+          embeds: m.embeds.map((e) => ({
+            title: e.title || null,
+            description: String(e.description || '').slice(0, 5000),
+            fields: (e.fields || []).map((x) => ({ name: x.name, value: String(x.value || '').slice(0, 3000) }))
+          }))
+        }))
+      }));
+    }
   } catch (err) {
     console.error('MEMBER_VERIFICATION_INSPECT_FAILED', err?.rawError || err?.message || err);
   }
