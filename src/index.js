@@ -443,7 +443,7 @@ async function leaderboardPayload() {
   if (icon) {
     c.addSectionComponents(new SectionBuilder()
       .addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(`# 💚 INVITE & EARN · WEEK ${weekNo}`),
+        new TextDisplayBuilder().setContent(`# 💚 INVITE & WIN · WEEK ${weekNo}`),
         new TextDisplayBuilder().setContent(`Invite creators to the **Fanvue AI Creator Academy** and climb the live **Week ${weekNo}** leaderboard.`)
       )
       .setThumbnailAccessory(new ThumbnailBuilder().setURL(icon).setDescription('Fanvue AI Creator Academy'))
@@ -453,7 +453,7 @@ async function leaderboardPayload() {
   }
   c.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
   c.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`## 🏆 WEEK ${weekNo} LEADERBOARD\n${podium}`),
+    new TextDisplayBuilder().setContent(`## 🏆 LEADERBOARD\n${podium}`),
     new TextDisplayBuilder().setContent('**🎁 Top 5 each win a prize.**'),
     new TextDisplayBuilder().setContent('*Monday 00:00 UK → Sunday 23:59 UK · counts immediately · low-quality or departed referrals can be auto-revoked*')
   );
