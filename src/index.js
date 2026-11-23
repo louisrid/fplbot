@@ -177,8 +177,8 @@ async function rebuildWeeklyCountsFromDiscord(invites = null) {
   return counts;
 }
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites, GatewayIntentBits.GuildMessages] });
-let guild, invitesChannel, landingChannel, creatorRole, memberCountChannel, generalChannel, creationsChannel;
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites] });
+let guild, invitesChannel, landingChannel, creatorRole, memberCountChannel, generalChannel;
 let syncing = false;
 let refreshTimer = null;
 let qualityTimer = null;
@@ -242,119 +242,107 @@ async function findChannel(id, name) {
   return [...guild.channels.cache.values()].find((c) => c.isTextBased?.() && norm(c.name) === q) || null;
 }
 
-async function configureCommunityMediaChannels() {
+async function configureGeneralMediaPolicy() {
   generalChannel = guild.channels.cache.get('1427337799451021521')
     || [...guild.channels.cache.values()].find((ch) => ch.isTextBased?.() && norm(ch.name) === 'general')
     || null;
 
-  creationsChannel = [...guild.channels.cache.values()].find((ch) =>
-    ch.isTextBased?.() && norm(ch.name) === 'creations'
-  ) || null;
-
-  if (!generalChannel) console.warn('GENERAL_CHANNEL_NOT_FOUND');
-  if (!creationsChannel) console.warn('CREATIONS_CHANNEL_NOT_FOUND');
+  if (!generalChannel) {
+    console.warn('GENERAL_CHANNEL_NOT_FOUND');
+    return;
+  }
 
   for (const roleId of CREATOR_RANK_IDS) {
     if (!guild.roles.cache.has(roleId)) continue;
-
-    if (generalChannel) {
-      await generalChannel.permissionOverwrites.edit(roleId, {
-        AttachFiles: false,
-      }, { reason: 'Keep #general text-first and route member media to #creations' });
-    }
-
-    if (creationsChannel) {
-      await creationsChannel.permissionOverwrites.edit(roleId, {
-        ViewChannel: true,
-        SendMessages: true,
-        AttachFiles: true,
-        EmbedLinks: true,
-        AddReactions: true,
-        ReadMessageHistory: true,
-        SendMessagesInThreads: true,
-        CreatePublicThreads: false,
-        CreatePrivateThreads: false,
-      }, { reason: 'Media-first #creations with bot-created discussion threads' });
-    }
+    await generalChannel.permissionOverwrites.edit(roleId, {
+      AttachFiles: false,
+    }, { reason: 'Keep #general text-first and route member media to creator channels' });
   }
 
-  if (creationsChannel) {
-    for (const staffRoleId of ['1447969609176318042', '1427337798129680523']) {
-      if (!guild.roles.cache.has(staffRoleId)) continue;
-      await creationsChannel.permissionOverwrites.edit(staffRoleId, {
-        ViewChannel: true,
-        SendMessages: true,
-        AttachFiles: true,
-        EmbedLinks: true,
-        AddReactions: true,
-        ReadMessageHistory: true,
-        CreatePublicThreads: true,
-        CreatePrivateThreads: true,
-        SendMessagesInThreads: true,
-        ManageMessages: true,
-        ManageThreads: true,
-      }, { reason: 'Ensure MOD and ADMIN can fully moderate #creations and its threads' });
+  console.log('GENERAL_MEDIA_POLICY ' + JSON.stringify({
+    id: generalChannel.id,
+    name: generalChannel.name,
+    creatorAttachmentsBlocked: true,
+    explicitContentFilter: guild.explicitContentFilter
+  }));
+}
+
+async function restoreCreationsChannelOnce() {
+  const creations = [...guild.channels.cache.values()].find((ch) =>
+    ch.isTextBased?.() && norm(ch.name) === 'creations'
+  ) || null;
+
+  if (!creations) {
+    console.warn('CREATIONS_CHANNEL_NOT_FOUND_FOR_RESTORE');
+    return;
+  }
+
+  // Delete only discussion threads created by this bot under #creations.
+  const active = await guild.channels.fetchActiveThreads().catch(() => null);
+  let deletedThreads = 0;
+  if (active?.threads) {
+    for (const thread of active.threads.values()) {
+      if (thread.parentId !== creations.id || thread.ownerId !== client.user.id) continue;
+      await thread.delete('Restore #creations to its pre-thread behaviour').catch(() => null);
+      deletedThreads++;
     }
   }
 
-  if (creationsChannel && guild.members.me) {
-    await creationsChannel.permissionOverwrites.edit(guild.members.me.id, {
-      ViewChannel: true,
-      SendMessages: true,
-      ReadMessageHistory: true,
-      CreatePublicThreads: true,
-      SendMessagesInThreads: true,
-      ManageThreads: true,
-    }, { reason: 'Allow Fanvue bot to create and manage creation discussion threads' });
+  // Remove only the explicit permission values this rollout added, so the
+  // channel goes back to its inherited/pre-existing permission behaviour.
+  const creatorReset = {
+    ViewChannel: null,
+    SendMessages: null,
+    AttachFiles: null,
+    EmbedLinks: null,
+    AddReactions: null,
+    ReadMessageHistory: null,
+    SendMessagesInThreads: null,
+    CreatePublicThreads: null,
+    CreatePrivateThreads: null,
+  };
+  for (const roleId of CREATOR_RANK_IDS) {
+    if (!guild.roles.cache.has(roleId)) continue;
+    await creations.permissionOverwrites.edit(roleId, creatorReset, {
+      reason: 'Restore #creations permissions to pre-thread behaviour'
+    });
   }
 
-  const auditRoleIds = [
-    ...CREATOR_RANK_IDS,
-    '1447969609176318042', // MOD
-    '1427337798129680523', // ADMIN
-  ];
+  const staffReset = {
+    ViewChannel: null,
+    SendMessages: null,
+    AttachFiles: null,
+    EmbedLinks: null,
+    AddReactions: null,
+    ReadMessageHistory: null,
+    CreatePublicThreads: null,
+    CreatePrivateThreads: null,
+    SendMessagesInThreads: null,
+    ManageMessages: null,
+    ManageThreads: null,
+  };
+  for (const roleId of ['1447969609176318042', '1427337798129680523']) {
+    if (!guild.roles.cache.has(roleId)) continue;
+    await creations.permissionOverwrites.edit(roleId, staffReset, {
+      reason: 'Restore #creations staff permissions to inherited/pre-existing behaviour'
+    });
+  }
 
-  const effective = auditRoleIds.map((roleId) => {
-    const role = guild.roles.cache.get(roleId);
-    if (!role) return null;
-    const generalPerms = generalChannel?.permissionsFor(role);
-    const creationsPerms = creationsChannel?.permissionsFor(role);
-    return {
-      id: role.id,
-      name: role.name,
-      general: generalPerms ? {
-        view: generalPerms.has(PermissionsBitField.Flags.ViewChannel),
-        send: generalPerms.has(PermissionsBitField.Flags.SendMessages),
-        attach: generalPerms.has(PermissionsBitField.Flags.AttachFiles),
-      } : null,
-      creations: creationsPerms ? {
-        view: creationsPerms.has(PermissionsBitField.Flags.ViewChannel),
-        send: creationsPerms.has(PermissionsBitField.Flags.SendMessages),
-        attach: creationsPerms.has(PermissionsBitField.Flags.AttachFiles),
-        react: creationsPerms.has(PermissionsBitField.Flags.AddReactions),
-        createPublicThreads: creationsPerms.has(PermissionsBitField.Flags.CreatePublicThreads),
-        createPrivateThreads: creationsPerms.has(PermissionsBitField.Flags.CreatePrivateThreads),
-        sendInThreads: creationsPerms.has(PermissionsBitField.Flags.SendMessagesInThreads),
-      } : null,
-    };
-  }).filter(Boolean);
+  if (guild.members.me) {
+    await creations.permissionOverwrites.edit(guild.members.me.id, {
+      ViewChannel: null,
+      SendMessages: null,
+      ReadMessageHistory: null,
+      CreatePublicThreads: null,
+      SendMessagesInThreads: null,
+      ManageThreads: null,
+    }, { reason: 'Remove temporary Fanvue thread permissions from #creations' });
+  }
 
-  console.log('COMMUNITY_MEDIA_CONFIG ' + JSON.stringify({
-    explicitContentFilter: guild.explicitContentFilter,
-    general: generalChannel ? {
-      id: generalChannel.id,
-      name: generalChannel.name,
-      creatorAttachmentsBlocked: true
-    } : null,
-    creations: creationsChannel ? {
-      id: creationsChannel.id,
-      name: creationsChannel.name,
-      creatorAttachmentsAllowed: true,
-      memberThreadCreationBlocked: true,
-      memberThreadRepliesAllowed: true,
-      autoThreadsEnabled: process.env.CREATIONS_THREADS_ENABLED === 'true'
-    } : null,
-    effective
+  console.log('CREATIONS_RESTORED ' + JSON.stringify({
+    id: creations.id,
+    name: creations.name,
+    deletedBotThreads: deletedThreads
   }));
 }
 
@@ -765,7 +753,8 @@ client.once('clientReady', async () => {
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
   await guild.roles.fetch();
-  await configureCommunityMediaChannels();
+  await configureGeneralMediaPolicy();
+  await restoreCreationsChannelOnce();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
   memberCountChannel = await guild.channels.fetch('1572455999158231260').catch(() => null);
@@ -796,30 +785,6 @@ client.once('clientReady', async () => {
   memberCountTimer.unref();
   console.log(`READY ${client.user.tag} · ${guild.name} · live sync ${cfg.pollMs/1000}s · quality sweep ${cfg.qualitySweepMs/60000}m · live voice member count enabled`);
   setTimeout(() => sweepCreatorRanksOnce().catch(console.error), 5000).unref?.();
-});
-
-client.on('messageCreate', (message) => {
-  if (process.env.CREATIONS_THREADS_ENABLED !== 'true') return;
-  if (!creationsChannel || message.guildId !== guildId || message.channelId !== creationsChannel.id) return;
-  if (message.author?.bot || message.webhookId) return;
-
-  const timer = setTimeout(async () => {
-    try {
-      const fresh = await creationsChannel.messages.fetch(message.id).catch(() => null);
-      if (!fresh || fresh.author?.bot || fresh.hasThread) return;
-
-      const rawName = fresh.member?.displayName || fresh.author?.globalName || fresh.author?.username || 'Creation';
-      const safeName = cleanLeaderboardName(rawName) || 'Creation';
-      const thread = await fresh.startThread({
-        name: `💬 ${safeName}`.slice(0, 100),
-        reason: 'Keep #creations discussion inside a thread under each media post'
-      });
-      console.log('CREATION_THREAD_CREATED ' + JSON.stringify({ messageId: fresh.id, threadId: thread.id }));
-    } catch (err) {
-      console.error('CREATION_THREAD_CREATE_FAILED', message.id, err);
-    }
-  }, 4000);
-  timer.unref?.();
 });
 
 client.on('guildMemberAdd', (member) => {
