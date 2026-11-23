@@ -820,7 +820,7 @@ async function syncServerRules() {
 
 const COURSE_TRACK_URL = 'https://fanvue-academy-invite-bot.onrender.com/course';
 const COURSE_DESTINATION = 'https://fanvueaicreatoracademy.com/?utm_source=discord&utm_medium=community&utm_campaign=free_course&utm_content=start_free_course';
-const NETLIFY_COURSE_BEACON = 'https://elegant-swan-98c20a.netlify.app/.netlify/functions/health?source=discord-free-course';
+const NETLIFY_COURSE_BEACON = 'https://elegant-swan-98c20a.netlify.app/?source=discord-free-course';
 
 async function ensureTrackedFreeCourseButton() {
   const ch = guild.channels.cache.get('1538918064773537874');
@@ -864,6 +864,7 @@ function recordCourseClick() {
   // Netlify records this unique 200 request in Observability. Fire-and-forget
   // so tracking can never slow or block the member's course redirect.
   void fetch(NETLIFY_COURSE_BEACON, {
+    method: 'HEAD',
     headers: { 'user-agent': 'Fanvue-Academy-Course-Tracker/1.0' },
     signal: AbortSignal.timeout(5000)
   }).catch((err) => console.error('COURSE_NETLIFY_BEACON_FAILED', String(err?.message || err)));
