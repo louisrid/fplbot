@@ -688,6 +688,41 @@ async function getOrCreateLink(user) {
 }
 
 
+async function inspectRulesChannelOnce() {
+  const candidates = [...guild.channels.cache.values()].filter((ch) =>
+    ch.isTextBased?.() && /rules?/i.test(String(ch.name || ''))
+  );
+
+  for (const ch of candidates) {
+    const perms = ch.permissionsFor(guild.members.me);
+    if (!perms?.has(PermissionsBitField.Flags.ViewChannel) || !perms?.has(PermissionsBitField.Flags.ReadMessageHistory)) continue;
+
+    const recent = await ch.messages.fetch({ limit: 25 }).catch(() => null);
+    if (!recent) continue;
+
+    const rows = [...recent.values()].map((m) => ({
+      id: m.id,
+      authorId: m.author?.id || null,
+      authorTag: m.author?.tag || null,
+      bot: Boolean(m.author?.bot),
+      pinned: Boolean(m.pinned),
+      content: String(m.content || '').slice(0, 4000),
+      embeds: m.embeds.map((e) => ({
+        title: e.title || null,
+        description: String(e.description || '').slice(0, 4000),
+        fields: (e.fields || []).map((x) => ({ name: x.name, value: String(x.value || '').slice(0, 2000) }))
+      }))
+    }));
+
+    console.log('RULES_CHANNEL_INSPECT ' + JSON.stringify({
+      id: ch.id,
+      name: ch.name,
+      rows
+    }));
+  }
+}
+
+
 async function removeFiveMinuteTypingRequirement() {
   if (guild.verificationLevel === 2) {
     await guild.setVerificationLevel(1, 'Remove 5-minute account-age typing requirement; retain verified-email requirement');
@@ -707,6 +742,7 @@ client.once('clientReady', async () => {
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
   await guild.roles.fetch();
+  await inspectRulesChannelOnce();
   await configureGeneralMediaPolicy();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
