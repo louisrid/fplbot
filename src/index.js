@@ -980,7 +980,7 @@ function supportInfoPayload() {
       new SectionBuilder()
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent('# 🆘 SUPPORT'),
-          new TextDisplayBuilder().setContent('Private help for the Academy, Fanvue & your creator setup.')
+          new TextDisplayBuilder().setContent('Help with the **Fanvue AI Creator Academy**, Discord community & AI creator setup.')
         )
         .setThumbnailAccessory(
           new ThumbnailBuilder()
@@ -990,7 +990,7 @@ function supportInfoPayload() {
     );
   } else {
     card.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent('# 🆘 SUPPORT\nPrivate help for the Academy, Fanvue & your creator setup.')
+      new TextDisplayBuilder().setContent('# 🆘 SUPPORT\nHelp with the **Fanvue AI Creator Academy**, Discord community & AI creator setup.')
     );
   }
 
@@ -999,8 +999,10 @@ function supportInfoPayload() {
   );
 
   card.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent('## OPEN A SUPPORT TICKET'),
-    new TextDisplayBuilder().setContent('Use the **ticket button above** and include the key details or screenshots.')
+    new TextDisplayBuilder().setContent('## BEFORE OPENING A TICKET'),
+    new TextDisplayBuilder().setContent('**This is not Fanvue account or platform support.**\nFor login, verification, payouts, billing, withdrawals, account restrictions or other Fanvue account issues, please contact **official Fanvue Support**.'),
+    new TextDisplayBuilder().setContent('For Academy, Discord or AI creator help, use the **ticket button above**. Our support assistant may reply first, with staff stepping in when needed.'),
+    new TextDisplayBuilder().setContent('Include the key details or screenshots so we can help faster.')
   );
 
   return {
