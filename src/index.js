@@ -876,29 +876,115 @@ function recordCourseClick() {
 }
 
 
-async function inspectToolsChannelOnce() {
-  const channels = [...guild.channels.cache.values()].filter((ch) =>
-    ch.isTextBased?.() && /tools?/i.test(norm(ch.name))
+const TOOLS_CHANNEL_ID = '1500813243692617789';
+const OLD_TOOLS_MESSAGE_ID = '1500818505598107730';
+const TOOLS_MESSAGE_MARKER = 'AI CREATOR TOOLS';
+
+function toolsMessagePayload() {
+  const card = new ContainerBuilder().setAccentColor(0x75FB4C);
+  const icon = guild.iconURL({ size: 128 });
+
+  if (icon) {
+    card.addSectionComponents(
+      new SectionBuilder()
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent('# 🛠️ AI CREATOR TOOLS'),
+          new TextDisplayBuilder().setContent('Useful tools & resources to create, grow & monetise your AI creator.')
+        )
+        .setThumbnailAccessory(
+          new ThumbnailBuilder()
+            .setURL(icon)
+            .setDescription('Fanvue AI Creator Academy')
+        )
+    );
+  } else {
+    card.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('# 🛠️ AI CREATOR TOOLS\nUseful tools & resources to create, grow & monetise your AI creator.')
+    );
+  }
+
+  card.addSeparatorComponents(
+    new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small)
   );
 
-  for (const ch of channels) {
-    const recent = await ch.messages.fetch({ limit: 25 }).catch(() => null);
-    if (!recent) continue;
-    console.log('TOOLS_CHANNEL_INSPECT ' + JSON.stringify({
-      id: ch.id,
-      name: ch.name,
-      parentId: ch.parentId || null,
-      rows: [...recent.values()].map((m) => ({
-        id: m.id,
-        authorId: m.author?.id || null,
-        authorTag: m.author?.tag || null,
-        bot: Boolean(m.author?.bot),
-        pinned: Boolean(m.pinned),
-        flags: m.flags?.bitfield?.toString?.() || null,
-        raw: m.toJSON()
-      }))
-    }));
+  card.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent('## ⚡ CREATE\n**Creator in Seconds**\nStart creating your AI influencer with a simple guided setup.'),
+    new TextDisplayBuilder().setContent('## 💚 FANVUE TOOLS\n**Fanvue App Store**\nExplore approved tools for content, scheduling, engagement, revenue & analytics.'),
+    new TextDisplayBuilder().setContent('## 🎓 LEARN\n**Free AI Creator Course**\nFollow the full starter course from setup to launch.')
+  );
+
+  card.addSeparatorComponents(
+    new SeparatorBuilder().setDivider(false).setSpacing(SeparatorSpacingSize.Small)
+  );
+
+  card.addActionRowComponents(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setLabel('CREATOR IN SECONDS')
+        .setEmoji('⚡')
+        .setStyle(ButtonStyle.Link)
+        .setURL('https://creatorinseconds.com'),
+      new ButtonBuilder()
+        .setLabel('FANVUE APP STORE')
+        .setEmoji('💚')
+        .setStyle(ButtonStyle.Link)
+        .setURL('https://www.fanvue.com/apps')
+    )
+  );
+
+  card.addActionRowComponents(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setLabel('START FREE COURSE')
+        .setEmoji('🎓')
+        .setStyle(ButtonStyle.Link)
+        .setURL(COURSE_TRACK_URL)
+    )
+  );
+
+  return {
+    flags: MessageFlags.IsComponentsV2,
+    components: [card],
+    allowedMentions: { parse: [] }
+  };
+}
+
+async function syncToolsMessage() {
+  const ch = guild.channels.cache.get(TOOLS_CHANNEL_ID) || await guild.channels.fetch(TOOLS_CHANNEL_ID).catch(() => null);
+  if (!ch?.isTextBased?.()) {
+    console.warn('TOOLS_CHANNEL_NOT_FOUND');
+    return;
   }
+
+  const recent = await ch.messages.fetch({ limit: 25 }).catch(() => null);
+  let current = recent
+    ? [...recent.values()].find((m) =>
+        m.author?.id === client.user.id &&
+        JSON.stringify(m.components || []).includes(TOOLS_MESSAGE_MARKER)
+      )
+    : null;
+
+  if (current) {
+    await current.edit(toolsMessagePayload());
+  } else {
+    current = await ch.send(toolsMessagePayload());
+  }
+
+  const old = await ch.messages.fetch(OLD_TOOLS_MESSAGE_ID).catch(() => null);
+  if (old && old.id !== current.id) {
+    const canManage = ch.permissionsFor(guild.members.me)?.has(PermissionsBitField.Flags.ManageMessages) === true;
+    if (canManage) {
+      await old.delete().catch((err) => console.warn('OLD_TOOLS_MESSAGE_DELETE_FAILED', err?.message || err));
+    } else {
+      console.warn('OLD_TOOLS_MESSAGE_LEFT_IN_PLACE_NO_MANAGE_MESSAGES');
+    }
+  }
+
+  console.log('TOOLS_MESSAGE_CURRENT ' + JSON.stringify({
+    channelId: ch.id,
+    messageId: current.id,
+    oldMessageRemoved: !(await ch.messages.fetch(OLD_TOOLS_MESSAGE_ID).catch(() => null))
+  }));
 }
 
 
@@ -921,7 +1007,7 @@ client.once('clientReady', async () => {
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
   await guild.roles.fetch();
-  await inspectToolsChannelOnce();
+  await syncToolsMessage();
   await ensureTrackedFreeCourseButton();
   await syncServerRules();
   await configureGeneralMediaPolicy();
