@@ -966,6 +966,32 @@ async function syncToolsMessage() {
 }
 
 
+async function inspectSupportPanelsOnce() {
+  const channels = [...guild.channels.cache.values()].filter((ch) =>
+    ch.isTextBased?.() && /support|ticket|help/i.test(norm(ch.name))
+  );
+
+  for (const ch of channels) {
+    const recent = await ch.messages.fetch({ limit: 30 }).catch(() => null);
+    if (!recent) continue;
+    console.log('SUPPORT_CHANNEL_INSPECT ' + JSON.stringify({
+      id: ch.id,
+      name: ch.name,
+      parentId: ch.parentId || null,
+      rows: [...recent.values()].map((m) => ({
+        id: m.id,
+        authorId: m.author?.id || null,
+        authorTag: m.author?.tag || null,
+        bot: Boolean(m.author?.bot),
+        pinned: Boolean(m.pinned),
+        flags: m.flags?.bitfield?.toString?.() || null,
+        raw: m.toJSON()
+      }))
+    }));
+  }
+}
+
+
 async function removeFiveMinuteTypingRequirement() {
   if (guild.verificationLevel === 2) {
     await guild.setVerificationLevel(1, 'Remove 5-minute account-age typing requirement; retain verified-email requirement');
@@ -985,6 +1011,7 @@ client.once('clientReady', async () => {
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
   await guild.roles.fetch();
+  await inspectSupportPanelsOnce();
   await syncToolsMessage();
   await ensureTrackedFreeCourseButton();
   await syncMemberVerificationRules();
