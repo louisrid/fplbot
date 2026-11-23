@@ -103,6 +103,14 @@ function weekKey(now = new Date()) {
   local.setUTCDate(local.getUTCDate() - (dayMap[get('weekday')] ?? 0));
   return local.toISOString().slice(0, 10);
 }
+const CONTEST_START_WEEK = '2026-11-16';
+
+function contestWeekNumber(wk = weekKey()) {
+  const start = Date.parse(`${CONTEST_START_WEEK}T00:00:00Z`);
+  const current = Date.parse(`${wk}T00:00:00Z`);
+  return Math.max(1, Math.floor((current - start) / (7 * 24 * 60 * 60 * 1000)) + 1);
+}
+
 function weekCount(userId, wk = weekKey()) { return Number(state.weeks[wk]?.[userId] || 0); }
 function addCount(userId, n, wk = weekKey()) {
   if (!state.weeks[wk]) state.weeks[wk] = {};
@@ -417,7 +425,9 @@ async function recoverMappings(invites) {
 }
 
 async function leaderboardPayload() {
-  const rows = Object.entries(rollingSevenDayCounts()).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const wk = weekKey();
+  const weekNo = contestWeekNumber(wk);
+  const rows = Object.entries(state.weeks[wk] || {}).sort((a, b) => b[1] - a[1]).slice(0, 5);
   const medals = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'];
   const labels = ['1ST', '2ND', '3RD', '4TH', '5TH'];
   const podium = (await Promise.all([0,1,2,3,4].map(async (i) => {
@@ -433,19 +443,19 @@ async function leaderboardPayload() {
   if (icon) {
     c.addSectionComponents(new SectionBuilder()
       .addTextDisplayComponents(
-        new TextDisplayBuilder().setContent('# 💚 INVITE & EARN'),
-        new TextDisplayBuilder().setContent('Invite creators to the **Fanvue AI Creator Academy** and climb the live 7-day leaderboard.')
+        new TextDisplayBuilder().setContent(`# 💚 INVITE & EARN · WEEK ${weekNo}`),
+        new TextDisplayBuilder().setContent(`Invite creators to the **Fanvue AI Creator Academy** and climb the live **Week ${weekNo}** leaderboard.`)
       )
       .setThumbnailAccessory(new ThumbnailBuilder().setURL(icon).setDescription('Fanvue AI Creator Academy'))
     );
   } else {
-    c.addTextDisplayComponents(new TextDisplayBuilder().setContent('# 💚 INVITE & EARN\nInvite creators to the **Fanvue AI Creator Academy** and climb the live 7-day leaderboard.'));
+    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`# 💚 INVITE & EARN · WEEK ${weekNo}\nInvite creators to the **Fanvue AI Creator Academy** and climb the live **Week ${weekNo}** leaderboard.`));
   }
   c.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
   c.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`## 🏆 LAST 7 DAYS\n${podium}`),
+    new TextDisplayBuilder().setContent(`## 🏆 WEEK ${weekNo} LEADERBOARD\n${podium}`),
     new TextDisplayBuilder().setContent('**🎁 Top 5 each win a prize.**'),
-    new TextDisplayBuilder().setContent('*Rolling 7 days · counts immediately · low-quality or departed referrals can be auto-revoked*')
+    new TextDisplayBuilder().setContent('*Monday 00:00 UK → Sunday 23:59 UK · counts immediately · low-quality or departed referrals can be auto-revoked*')
   );
   c.addSeparatorComponents(new SeparatorBuilder().setDivider(false).setSpacing(SeparatorSpacingSize.Small));
   c.addActionRowComponents(new ActionRowBuilder().addComponents(
@@ -583,14 +593,17 @@ async function syncInviteCounters({ bootstrap = false } = {}) {
     const invites = await guild.invites.fetch({ cache: false });
     if (bootstrap || Object.keys(state.links).length === 0) await recoverMappings(invites);
 
-    const before = JSON.stringify(rollingSevenDayCounts());
+    const currentWeek = weekKey();
+    const previousWeek = state.lastWeek;
+    const before = JSON.stringify(state.weeks[currentWeek] || {});
     await rebuildWeeklyCountsFromDiscord(invites);
-    const after = JSON.stringify(rollingSevenDayCounts());
-    state.lastWeek = weekKey();
+    const after = JSON.stringify(state.weeks[currentWeek] || {});
+    const weekChanged = previousWeek !== currentWeek;
+    state.lastWeek = currentWeek;
     await save();
 
-    if (bootstrap || before !== after) {
-      console.log('LIVE_7_DAY_COUNTS ' + after);
+    if (bootstrap || weekChanged || before !== after) {
+      console.log('LIVE_WEEK_COUNTS ' + JSON.stringify({ week: currentWeek, weekNo: contestWeekNumber(currentWeek), counts: JSON.parse(after) }));
       await updateLeaderboard(true);
     }
   } finally {
