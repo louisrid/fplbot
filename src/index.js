@@ -311,6 +311,43 @@ async function configureGeneralMediaPolicy() {
   }));
 }
 
+async function configureCreationsPolicy() {
+  const creations = [...guild.channels.cache.values()].find((ch) => ch.isTextBased?.() && norm(ch.name) === 'creations') || null;
+  if (!creations) {
+    console.warn('CREATIONS_CHANNEL_NOT_FOUND');
+    return;
+  }
+
+  const normalUse = {
+    ViewChannel: true,
+    SendMessages: true,
+    AttachFiles: true,
+    EmbedLinks: true,
+    AddReactions: true,
+    ReadMessageHistory: true,
+    CreatePublicThreads: true,
+    CreatePrivateThreads: true,
+    SendMessagesInThreads: true,
+  };
+
+  for (const roleId of CREATOR_RANK_IDS) {
+    if (!guild.roles.cache.has(roleId)) continue;
+    await creations.permissionOverwrites.edit(roleId, normalUse, {
+      reason: 'Restore normal creator posting, media and thread access in #creations'
+    });
+  }
+
+  console.log('CREATIONS_POLICY_RESTORED ' + JSON.stringify({
+    id: creations.id,
+    roleCount: CREATOR_RANK_IDS.filter((id) => guild.roles.cache.has(id)).length,
+    text: true,
+    media: true,
+    threads: true,
+    threadReplies: true
+  }));
+}
+
+
 async function auditCommunityChannels() {
   const creations = [...guild.channels.cache.values()].find((ch) => ch.isTextBased?.() && norm(ch.name) === 'creations') || null;
   const general = generalChannel || guild.channels.cache.get('1427337799451021521') || null;
@@ -966,6 +1003,7 @@ client.once('clientReady', async () => {
   await ensureTrackedFreeCourseButton();
   await syncServerRules();
   await configureGeneralMediaPolicy();
+  await configureCreationsPolicy();
   await auditCommunityChannels();
   await auditOrdinaryMemberExperience();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
