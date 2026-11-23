@@ -383,6 +383,46 @@ async function auditCommunityChannels() {
 }
 
 
+async function auditOrdinaryMemberExperience() {
+  try {
+    const members = await guild.members.fetch();
+    const verifiedRoleId = '1499030714341920783';
+    const staffIds = new Set(['1427337798129680523', '1447969609176318042']);
+    const sample = [...members.values()].find((m) =>
+      !m.user?.bot &&
+      m.roles.cache.has(verifiedRoleId) &&
+      ![...staffIds].some((id) => m.roles.cache.has(id))
+    ) || null;
+
+    const creations = [...guild.channels.cache.values()].find((ch) => ch.isTextBased?.() && norm(ch.name) === 'creations') || null;
+    const flags = (channel) => {
+      const p = sample && channel?.permissionsFor(sample);
+      if (!p) return null;
+      return {
+        view: p.has(PermissionsBitField.Flags.ViewChannel),
+        send: p.has(PermissionsBitField.Flags.SendMessages),
+        attach: p.has(PermissionsBitField.Flags.AttachFiles),
+        createPublicThreads: p.has(PermissionsBitField.Flags.CreatePublicThreads),
+        createPrivateThreads: p.has(PermissionsBitField.Flags.CreatePrivateThreads),
+        sendInThreads: p.has(PermissionsBitField.Flags.SendMessagesInThreads),
+      };
+    };
+
+    const verifiedRole = guild.roles.cache.get(verifiedRoleId);
+    console.log('ORDINARY_MEMBER_EXPERIENCE ' + JSON.stringify({
+      sampleFound: Boolean(sample),
+      sampleRoleCount: sample?.roles.cache.size || 0,
+      verifiedRoleManaged: verifiedRole?.managed ?? null,
+      verifiedRoleAdministrator: verifiedRole?.permissions.has(PermissionsBitField.Flags.Administrator) ?? null,
+      general: flags(generalChannel),
+      creations: flags(creations),
+    }));
+  } catch (err) {
+    console.error('ORDINARY_MEMBER_EXPERIENCE_FAILED', err?.message || err);
+  }
+}
+
+
 async function configureHangoutChannel() {
   if (!memberCountChannel) return;
 
@@ -929,6 +969,7 @@ client.once('clientReady', async () => {
   await syncServerRules();
   await configureGeneralMediaPolicy();
   await auditCommunityChannels();
+  await auditOrdinaryMemberExperience();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
   memberCountChannel = await guild.channels.fetch('1572455999158231260').catch(() => null);
