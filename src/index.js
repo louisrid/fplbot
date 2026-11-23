@@ -688,99 +688,82 @@ async function getOrCreateLink(user) {
 }
 
 
-async function inspectMemberVerificationOnce() {
+const SERVER_RULES = [
+  'Be respectful. No harassment, hate speech, threats or bullying.',
+  'Keep public channels SFW. No nudity, explicit sexual content or graphic violence.',
+  'No scams, phishing, malware, stolen content or illegal activity.',
+  'Sharing relevant tools, apps & projects is fine. No spam, repeated ads or unsolicited sales DMs.',
+  'Keep posts in the right channel and avoid flooding chats.',
+];
+
+const SERVER_RULES_POST = `## Server Rules
+
+**1. Be respectful**
+No harassment, hate speech, threats or bullying.
+
+**2. Keep it SFW**
+No nudity, explicit sexual content or graphic violence in public channels.
+
+**3. No scams or stolen content**
+No phishing, malware, stolen content or illegal activity.
+
+**4. Relevant promotion is fine**
+Share useful tools, apps & projects. No spam, repeated ads or unsolicited sales DMs.
+
+**5. Keep channels on topic**
+Post in the right place and avoid flooding chats.
+
+Discord & Fanvue policies still apply.`;
+
+async function syncServerRules() {
   try {
-    const data = await client.rest.get(`/guilds/${guild.id}/member-verification`);
-    console.log('MEMBER_VERIFICATION_INSPECT ' + JSON.stringify(data));
+    const current = await client.rest.get(`/guilds/${guild.id}/member-verification`);
+    const currentValues = current?.form_fields?.[0]?.values || [];
 
-    for (const route of [
-      `/guilds/${guild.id}/onboarding`,
-      `/guilds/${guild.id}/new-member-actions`,
-      `/guilds/${guild.id}/welcome-screen`,
-      `/guilds/${guild.id}/home-settings`
-    ]) {
-      try {
-        const cfg = await client.rest.get(route);
-        console.log('GUILD_GUIDE_INSPECT ' + JSON.stringify({ route, cfg }));
-      } catch (err) {
-        console.log('GUILD_GUIDE_INSPECT_FAILED ' + JSON.stringify({
-          route,
-          code: err?.code || null,
-          status: err?.status || null,
-          message: err?.rawError?.message || err?.message || String(err)
-        }));
-      }
-    }
-
-    for (const channelId of ['1427337799451021519', '1427337799451021516']) {
-      const ch = guild.channels.cache.get(channelId);
-      if (!ch?.isTextBased?.()) continue;
-      const recent = await ch.messages.fetch({ limit: 25 }).catch(() => null);
-      if (!recent) continue;
-      console.log('INFO_RULES_MESSAGES ' + JSON.stringify({
-        id: ch.id,
-        name: ch.name,
-        rows: [...recent.values()].map((m) => ({
-          id: m.id,
-          authorId: m.author?.id || null,
-          authorTag: m.author?.tag || null,
-          bot: Boolean(m.author?.bot),
-          pinned: Boolean(m.pinned),
-          content: String(m.content || '').slice(0, 5000),
-          embeds: m.embeds.map((e) => ({
-            title: e.title || null,
-            description: String(e.description || '').slice(0, 5000),
-            fields: (e.fields || []).map((x) => ({ name: x.name, value: String(x.value || '').slice(0, 3000) }))
-          }))
-        }))
-      }));
+    if (JSON.stringify(currentValues) !== JSON.stringify(SERVER_RULES)) {
+      await client.rest.patch(`/guilds/${guild.id}/member-verification`, {
+        body: {
+          form_fields: [{
+            field_type: 'TERMS',
+            label: 'Read and agree to the server rules',
+            description: null,
+            required: true,
+            values: SERVER_RULES,
+          }]
+        },
+        reason: 'Simplify and align Fanvue AI community rules'
+      });
+      console.log('MEMBER_VERIFICATION_RULES_UPDATED ' + JSON.stringify(SERVER_RULES));
+    } else {
+      console.log('MEMBER_VERIFICATION_RULES_ALREADY_CURRENT');
     }
   } catch (err) {
-    console.error('MEMBER_VERIFICATION_INSPECT_FAILED', err?.rawError || err?.message || err);
-  }
-}
-
-
-async function inspectRulesChannelOnce() {
-  const candidates = [...guild.channels.cache.values()].filter((ch) =>
-    ch.isTextBased?.() && /rules?/i.test(String(ch.name || ''))
-  );
-
-  for (const ch of candidates) {
-    const perms = ch.permissionsFor(guild.members.me);
-    if (!perms?.has(PermissionsBitField.Flags.ViewChannel) || !perms?.has(PermissionsBitField.Flags.ReadMessageHistory)) continue;
-
-    const recent = await ch.messages.fetch({ limit: 25 }).catch(() => null);
-    if (!recent) continue;
-
-    const rows = [...recent.values()].map((m) => ({
-      id: m.id,
-      authorId: m.author?.id || null,
-      authorTag: m.author?.tag || null,
-      bot: Boolean(m.author?.bot),
-      pinned: Boolean(m.pinned),
-      content: String(m.content || '').slice(0, 4000),
-      embeds: m.embeds.map((e) => ({
-        title: e.title || null,
-        description: String(e.description || '').slice(0, 4000),
-        fields: (e.fields || []).map((x) => ({ name: x.name, value: String(x.value || '').slice(0, 2000) }))
-      }))
-    }));
-
-    console.log('RULES_CHANNEL_INSPECT ' + JSON.stringify({
-      id: ch.id,
-      name: ch.name,
-      rows
-    }));
+    console.error('MEMBER_VERIFICATION_RULES_UPDATE_FAILED', err?.rawError || err?.message || err);
   }
 
-  console.log('DISCORD_TEXT_CHANNEL_INDEX ' + JSON.stringify({
-    guildRulesChannelId: guild.rulesChannelId || null,
-    publicUpdatesChannelId: guild.publicUpdatesChannelId || null,
-    channels: [...guild.channels.cache.values()]
-      .filter((ch) => ch.isTextBased?.())
-      .map((ch) => ({ id: ch.id, name: ch.name, parentId: ch.parentId || null }))
-  }));
+  const infoChannel = guild.channels.cache.get('1427337799451021519');
+  if (!infoChannel?.isTextBased?.()) {
+    console.warn('INFO_CHANNEL_NOT_FOUND_FOR_RULES');
+    return;
+  }
+
+  try {
+    const recent = await infoChannel.messages.fetch({ limit: 50 }).catch(() => null);
+    let msg = recent
+      ? [...recent.values()].find((m) => m.author?.id === client.user.id && m.content?.startsWith('## Server Rules'))
+      : null;
+
+    if (msg) {
+      if (msg.content !== SERVER_RULES_POST) msg = await msg.edit(SERVER_RULES_POST);
+    } else {
+      msg = await infoChannel.send(SERVER_RULES_POST);
+    }
+
+    if (!msg.pinned) await msg.pin('Pin current Fanvue AI community rules').catch(() => null);
+    console.log('INFO_RULES_POST_CURRENT ' + JSON.stringify({ channelId: infoChannel.id, messageId: msg.id, pinned: msg.pinned }));
+  } catch (err) {
+    console.error('INFO_RULES_POST_FAILED', err?.rawError || err?.message || err);
+  }
 }
 
 
@@ -803,8 +786,7 @@ client.once('clientReady', async () => {
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
   await guild.roles.fetch();
-  await inspectMemberVerificationOnce();
-  await inspectRulesChannelOnce();
+  await syncServerRules();
   await configureGeneralMediaPolicy();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
