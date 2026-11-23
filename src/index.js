@@ -980,7 +980,7 @@ function supportInfoPayload() {
       new SectionBuilder()
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent('# 🆘 SUPPORT'),
-          new TextDisplayBuilder().setContent('## ⬆️ USE THE SUPPORT BUTTON ABOVE')
+          new TextDisplayBuilder().setContent('Need help with the Academy or your Fanvue creator setup?')
         )
         .setThumbnailAccessory(
           new ThumbnailBuilder()
@@ -990,9 +990,18 @@ function supportInfoPayload() {
     );
   } else {
     card.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent('# 🆘 SUPPORT\n## ⬆️ USE THE SUPPORT BUTTON ABOVE')
+      new TextDisplayBuilder().setContent('# 🆘 SUPPORT\nNeed help with the Academy or your Fanvue creator setup?')
     );
   }
+
+  card.addSeparatorComponents(
+    new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small)
+  );
+
+  card.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent('Use the **support button above** to open a private ticket.'),
+    new TextDisplayBuilder().setContent('Add the key details or screenshots so we can help faster.')
+  );
 
   return {
     flags: MessageFlags.IsComponentsV2,
