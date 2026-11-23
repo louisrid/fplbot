@@ -894,23 +894,8 @@ async function inspectToolsChannelOnce() {
         authorTag: m.author?.tag || null,
         bot: Boolean(m.author?.bot),
         pinned: Boolean(m.pinned),
-        content: String(m.content || '').slice(0, 6000),
-        embeds: m.embeds.map((e) => ({
-          title: e.title || null,
-          description: String(e.description || '').slice(0, 6000),
-          url: e.url || null,
-          fields: (e.fields || []).map((x) => ({ name: x.name, value: String(x.value || '').slice(0, 3000) })),
-          image: e.image?.url || null,
-          thumbnail: e.thumbnail?.url || null
-        })),
-        components: m.components.map((row) => row.components.map((x) => ({
-          type: x.type,
-          customId: x.customId || null,
-          label: x.label || null,
-          url: x.url || null,
-          style: x.style || null,
-          emoji: x.emoji || null
-        })))
+        flags: m.flags?.bitfield?.toString?.() || null,
+        raw: m.toJSON()
       }))
     }));
   }
