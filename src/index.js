@@ -255,11 +255,20 @@ async function configureGeneralMediaPolicy() {
   }
 
   const staffRoleIds = new Set(['1447969609176318042', '1427337798129680523']);
+  const verifiedMemberRoleId = '1499030714341920783'; // Fanvue Academy
 
-  // One clean channel-wide rule: ordinary members cannot upload files/media in #general.
+  // Block uploads at both the base role and the normal verified-member role.
+  // The verified-member role previously had an inherited/explicit allow that
+  // could override the @everyone deny.
   await generalChannel.permissionOverwrites.edit(guild.roles.everyone.id, {
     AttachFiles: false,
   }, { reason: 'Keep #general text-first: block member file and media uploads' });
+
+  if (guild.roles.cache.has(verifiedMemberRoleId)) {
+    await generalChannel.permissionOverwrites.edit(verifiedMemberRoleId, {
+      AttachFiles: false,
+    }, { reason: 'Prevent verified-member media upload bypass in #general' });
+  }
 
   // Staff remain able to upload when moderation or support needs it.
   for (const roleId of staffRoleIds) {
@@ -269,17 +278,17 @@ async function configureGeneralMediaPolicy() {
     }, { reason: 'Allow staff file uploads in #general' });
   }
 
-  // Clean up the temporary per-rank denies from the earlier rollout.
+  // Clean up temporary creator-rank-specific media overrides from the earlier rollout.
   for (const roleId of CREATOR_RANK_IDS) {
     if (!guild.roles.cache.has(roleId)) continue;
     await generalChannel.permissionOverwrites.edit(roleId, {
       AttachFiles: null,
-    }, { reason: 'Use the single @everyone media rule for #general' });
+    }, { reason: 'Use base verified-member media policy for #general' });
   }
 
   // Remove any old explicit member-role/user allows that could bypass the channel-wide block.
   for (const overwrite of [...generalChannel.permissionOverwrites.cache.values()]) {
-    if (overwrite.id === guild.roles.everyone.id || staffRoleIds.has(overwrite.id)) continue;
+    if (overwrite.id === guild.roles.everyone.id || overwrite.id === verifiedMemberRoleId || staffRoleIds.has(overwrite.id)) continue;
     if (!overwrite.allow.has(PermissionsBitField.Flags.AttachFiles)) continue;
 
     if (overwrite.type === 0) {
@@ -296,6 +305,7 @@ async function configureGeneralMediaPolicy() {
     id: generalChannel.id,
     name: generalChannel.name,
     everyoneAttachFilesDenied: generalChannel.permissionOverwrites.cache.get(guild.roles.everyone.id)?.deny.has(PermissionsBitField.Flags.AttachFiles) === true,
+    verifiedMemberAttachFilesDenied: guild.roles.cache.has(verifiedMemberRoleId) ? !generalChannel.permissionsFor(guild.roles.cache.get(verifiedMemberRoleId))?.has(PermissionsBitField.Flags.AttachFiles) : null,
     staffAttachFilesAllowed: [...staffRoleIds].filter((id) => guild.roles.cache.has(id)).every((id) =>
       generalChannel.permissionsFor(guild.roles.cache.get(id))?.has(PermissionsBitField.Flags.AttachFiles)
     ),
