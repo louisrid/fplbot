@@ -973,35 +973,11 @@ const SUPPORT_INFO_MARKER = 'SUPPORT';
 
 function supportInfoPayload() {
   const card = new ContainerBuilder().setAccentColor(0x75FB4C);
-  const icon = guild.iconURL({ size: 128 });
-
-  if (icon) {
-    card.addSectionComponents(
-      new SectionBuilder()
-        .addTextDisplayComponents(
-          new TextDisplayBuilder().setContent('# 🆘 SUPPORT'),
-          new TextDisplayBuilder().setContent('Need help with the Academy or your Fanvue creator setup?')
-        )
-        .setThumbnailAccessory(
-          new ThumbnailBuilder()
-            .setURL(icon)
-            .setDescription('Fanvue AI Creator Academy')
-        )
-    );
-  } else {
-    card.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent('# 🆘 SUPPORT\nNeed help with the Academy or your Fanvue creator setup?')
-    );
-  }
-
-  card.addSeparatorComponents(
-    new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small)
-  );
 
   card.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent('Use the **support button below** to open a private ticket.'),
-    new TextDisplayBuilder().setContent('Our support assistant may reply first. A staff member can step in when needed.'),
-    new TextDisplayBuilder().setContent('Please include the key details or screenshots so we can help faster.')
+    new TextDisplayBuilder().setContent('# 🆘 SUPPORT'),
+    new TextDisplayBuilder().setContent('# ↑'),
+    new TextDisplayBuilder().setContent('Use the support button above to open a private ticket.')
   );
 
   return {
