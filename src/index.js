@@ -454,7 +454,7 @@ async function leaderboardPayload() {
   c.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
   c.addTextDisplayComponents(
     new TextDisplayBuilder().setContent(`## 🏆 LEADERBOARD\n${podium}`),
-    new TextDisplayBuilder().setContent('**🎁 Top inviters win a prize.**'),
+    new TextDisplayBuilder().setContent('**🎁 The top inviters win a prize.**'),
   );
   c.addSeparatorComponents(new SeparatorBuilder().setDivider(false).setSpacing(SeparatorSpacingSize.Small));
   c.addActionRowComponents(new ActionRowBuilder().addComponents(
