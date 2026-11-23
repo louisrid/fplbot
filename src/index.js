@@ -972,11 +972,33 @@ async function syncToolsMessage() {
 
   const old = await ch.messages.fetch(OLD_TOOLS_MESSAGE_ID).catch(() => null);
   if (old && old.id !== current.id) {
-    const canManage = ch.permissionsFor(guild.members.me)?.has(PermissionsBitField.Flags.ManageMessages) === true;
+    let temporaryManageMessages = false;
+    let canManage = ch.permissionsFor(guild.members.me)?.has(PermissionsBitField.Flags.ManageMessages) === true;
+
+    if (!canManage) {
+      try {
+        await ch.permissionOverwrites.edit(guild.members.me.id, {
+          ManageMessages: true,
+        }, { reason: 'Temporarily remove superseded tools post' });
+        temporaryManageMessages = true;
+        canManage = ch.permissionsFor(guild.members.me)?.has(PermissionsBitField.Flags.ManageMessages) === true;
+      } catch (err) {
+        console.warn('TOOLS_TEMP_MANAGE_MESSAGES_FAILED', err?.message || err);
+      }
+    }
+
     if (canManage) {
       await old.delete().catch((err) => console.warn('OLD_TOOLS_MESSAGE_DELETE_FAILED', err?.message || err));
     } else {
       console.warn('OLD_TOOLS_MESSAGE_LEFT_IN_PLACE_NO_MANAGE_MESSAGES');
+    }
+
+    if (temporaryManageMessages) {
+      await ch.permissionOverwrites.edit(guild.members.me.id, {
+        ManageMessages: null,
+      }, { reason: 'Remove temporary tools cleanup permission' }).catch((err) =>
+        console.warn('TOOLS_TEMP_PERMISSION_CLEANUP_FAILED', err?.message || err)
+      );
     }
   }
 
