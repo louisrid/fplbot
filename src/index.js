@@ -774,40 +774,6 @@ async function syncMemberVerificationRules() {
   }
 }
 
-async function cleanupBotPinsAndInfoRulesOnce() {
-  let unpinned = 0;
-  let deletedInfoRules = 0;
-
-  for (const ch of guild.channels.cache.values()) {
-    if (!ch.isTextBased?.()) continue;
-    const perms = ch.permissionsFor(guild.members.me);
-    if (!perms?.has(PermissionsBitField.Flags.ViewChannel) || !perms?.has(PermissionsBitField.Flags.ReadMessageHistory)) continue;
-
-    try {
-      const pins = await ch.messages.fetchPins();
-      for (const msg of pins.values()) {
-        if (msg.author?.id !== client.user.id) continue;
-        await msg.unpin('Remove pins previously created by Fanvue bot').catch(() => null);
-        unpinned++;
-      }
-    } catch {}
-
-    if (ch.id === '1427337799451021519') {
-      const recent = await ch.messages.fetch({ limit: 100 }).catch(() => null);
-      if (!recent) continue;
-      for (const msg of recent.values()) {
-        if (msg.author?.id !== client.user.id) continue;
-        if (!String(msg.content || '').startsWith('## Server Rules')) continue;
-        await msg.delete().catch(() => null);
-        deletedInfoRules++;
-      }
-    }
-  }
-
-  console.log('BOT_PIN_INFO_CLEANUP ' + JSON.stringify({ unpinned, deletedInfoRules }));
-}
-
-
 const COURSE_TRACK_URL = 'https://fanvue-academy-invite-bot.onrender.com/course';
 const COURSE_DESTINATION = 'https://fanvueaicreatoracademy.com/?utm_source=discord&utm_medium=community&utm_campaign=free_course&utm_content=start_free_course';
 const NETLIFY_COURSE_BEACON = 'https://elegant-swan-98c20a.netlify.app/?source=discord-free-course';
@@ -1022,7 +988,6 @@ client.once('clientReady', async () => {
   await syncToolsMessage();
   await ensureTrackedFreeCourseButton();
   await syncMemberVerificationRules();
-  await cleanupBotPinsAndInfoRulesOnce();
   await configureGeneralMediaPolicy();
   await configureCreationsPolicy();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
