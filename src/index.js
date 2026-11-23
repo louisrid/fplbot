@@ -454,7 +454,7 @@ async function leaderboardPayload() {
   c.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
   c.addTextDisplayComponents(
     new TextDisplayBuilder().setContent(`## 🏆 LEADERBOARD\n${podium}`),
-    new TextDisplayBuilder().setContent('**🎁 Top 5 each win a prize.**'),
+    new TextDisplayBuilder().setContent('**🎁 Top inviters win a prize.**'),
     new TextDisplayBuilder().setContent('*Monday 00:00 UK → Sunday 23:59 UK · counts immediately · low-quality or departed referrals can be auto-revoked*')
   );
   c.addSeparatorComponents(new SeparatorBuilder().setDivider(false).setSpacing(SeparatorSpacingSize.Small));
