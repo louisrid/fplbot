@@ -688,6 +688,16 @@ async function getOrCreateLink(user) {
 }
 
 
+async function inspectMemberVerificationOnce() {
+  try {
+    const data = await client.rest.get(`/guilds/${guild.id}/member-verification`);
+    console.log('MEMBER_VERIFICATION_INSPECT ' + JSON.stringify(data));
+  } catch (err) {
+    console.error('MEMBER_VERIFICATION_INSPECT_FAILED', err?.rawError || err?.message || err);
+  }
+}
+
+
 async function inspectRulesChannelOnce() {
   const candidates = [...guild.channels.cache.values()].filter((ch) =>
     ch.isTextBased?.() && /rules?/i.test(String(ch.name || ''))
@@ -750,6 +760,7 @@ client.once('clientReady', async () => {
   await removeFiveMinuteTypingRequirement();
   await guild.channels.fetch();
   await guild.roles.fetch();
+  await inspectMemberVerificationOnce();
   await inspectRulesChannelOnce();
   await configureGeneralMediaPolicy();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
