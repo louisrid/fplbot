@@ -255,19 +255,18 @@ async function configureGeneralMediaPolicy() {
   }
 
   const staffRoleIds = new Set(['1447969609176318042', '1427337798129680523']);
-  const verifiedMemberRoleId = '1499030714341920783'; // Fanvue Academy
 
-  // Block uploads at both the base role and the normal verified-member role.
-  // The verified-member role previously had an inherited/explicit allow that
-  // could override the @everyone deny.
+  // Ordinary members inherit this deny. Staff get an explicit allow below.
   await generalChannel.permissionOverwrites.edit(guild.roles.everyone.id, {
     AttachFiles: false,
   }, { reason: 'Keep #general text-first: block member file and media uploads' });
 
-  if (guild.roles.cache.has(verifiedMemberRoleId)) {
-    await generalChannel.permissionOverwrites.edit(verifiedMemberRoleId, {
-      AttachFiles: false,
-    }, { reason: 'Prevent verified-member media upload bypass in #general' });
+  // Remove the temporary managed-role overwrite from the verification audit.
+  const managedFanvueRoleId = '1499030714341920783';
+  if (guild.roles.cache.get(managedFanvueRoleId)?.managed) {
+    await generalChannel.permissionOverwrites.edit(managedFanvueRoleId, {
+      AttachFiles: null,
+    }, { reason: 'Remove temporary managed-role media audit overwrite' }).catch(() => null);
   }
 
   // Staff remain able to upload when moderation or support needs it.
@@ -288,7 +287,7 @@ async function configureGeneralMediaPolicy() {
 
   // Remove any old explicit member-role/user allows that could bypass the channel-wide block.
   for (const overwrite of [...generalChannel.permissionOverwrites.cache.values()]) {
-    if (overwrite.id === guild.roles.everyone.id || overwrite.id === verifiedMemberRoleId || staffRoleIds.has(overwrite.id)) continue;
+    if (overwrite.id === guild.roles.everyone.id || staffRoleIds.has(overwrite.id)) continue;
     if (!overwrite.allow.has(PermissionsBitField.Flags.AttachFiles)) continue;
 
     if (overwrite.type === 0) {
@@ -305,7 +304,6 @@ async function configureGeneralMediaPolicy() {
     id: generalChannel.id,
     name: generalChannel.name,
     everyoneAttachFilesDenied: generalChannel.permissionOverwrites.cache.get(guild.roles.everyone.id)?.deny.has(PermissionsBitField.Flags.AttachFiles) === true,
-    verifiedMemberAttachFilesDenied: guild.roles.cache.has(verifiedMemberRoleId) ? !generalChannel.permissionsFor(guild.roles.cache.get(verifiedMemberRoleId))?.has(PermissionsBitField.Flags.AttachFiles) : null,
     staffAttachFilesAllowed: [...staffRoleIds].filter((id) => guild.roles.cache.has(id)).every((id) =>
       generalChannel.permissionsFor(guild.roles.cache.get(id))?.has(PermissionsBitField.Flags.AttachFiles)
     ),
@@ -386,7 +384,7 @@ async function auditCommunityChannels() {
 async function auditOrdinaryMemberExperience() {
   try {
     const members = await guild.members.fetch();
-    const verifiedRoleId = '1499030714341920783';
+    const verifiedRoleId = '1430978118717538346'; // NEW CREATOR
     const staffIds = new Set(['1427337798129680523', '1447969609176318042']);
     const sample = [...members.values()].find((m) =>
       !m.user?.bot &&
@@ -412,8 +410,8 @@ async function auditOrdinaryMemberExperience() {
     console.log('ORDINARY_MEMBER_EXPERIENCE ' + JSON.stringify({
       sampleFound: Boolean(sample),
       sampleRoleCount: sample?.roles.cache.size || 0,
-      verifiedRoleManaged: verifiedRole?.managed ?? null,
-      verifiedRoleAdministrator: verifiedRole?.permissions.has(PermissionsBitField.Flags.Administrator) ?? null,
+      sampleRoleManaged: verifiedRole?.managed ?? null,
+      sampleRoleAdministrator: verifiedRole?.permissions.has(PermissionsBitField.Flags.Administrator) ?? null,
       general: flags(generalChannel),
       creations: flags(creations),
     }));
