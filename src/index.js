@@ -443,17 +443,17 @@ async function leaderboardPayload() {
   if (icon) {
     c.addSectionComponents(new SectionBuilder()
       .addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(`# 💚 INVITE & WIN · WEEK ${weekNo}`),
+        new TextDisplayBuilder().setContent('# 💚 INVITE & WIN'),
         new TextDisplayBuilder().setContent(`Invite creators to the **Fanvue AI Creator Academy** and climb the live **Week ${weekNo}** leaderboard.`)
       )
       .setThumbnailAccessory(new ThumbnailBuilder().setURL(icon).setDescription('Fanvue AI Creator Academy'))
     );
   } else {
-    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`# 💚 INVITE & WIN · WEEK ${weekNo}\nInvite creators to the **Fanvue AI Creator Academy** and climb the live **Week ${weekNo}** leaderboard.`));
+    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`# 💚 INVITE & WIN\nInvite creators to the **Fanvue AI Creator Academy** and climb the live **Week ${weekNo}** leaderboard.`));
   }
   c.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
   c.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`## 🏆 LEADERBOARD\n${podium}`),
+    new TextDisplayBuilder().setContent(`## 🏆 WEEK ${weekNo} LEADERBOARD\n${podium}`),
     new TextDisplayBuilder().setContent('**🎁 Top inviters win a prize.**'),
   );
   c.addSeparatorComponents(new SeparatorBuilder().setDivider(false).setSpacing(SeparatorSpacingSize.Small));
