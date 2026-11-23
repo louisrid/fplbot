@@ -747,26 +747,7 @@ const SERVER_RULES = [
   'Keep posts in the right channel and avoid flooding chats.',
 ];
 
-const SERVER_RULES_POST = `## Server Rules
-
-**1. Be respectful**
-No harassment, hate speech, threats or bullying.
-
-**2. Keep it SFW**
-No nudity, explicit sexual content or graphic violence in public channels.
-
-**3. No scams or stolen content**
-No phishing, malware, stolen content or illegal activity.
-
-**4. Relevant promotion is fine**
-Share useful tools, apps & projects. No spam, repeated ads or unsolicited sales DMs.
-
-**5. Keep channels on topic**
-Post in the right place and avoid flooding chats.
-
-Discord & Fanvue policies still apply.`;
-
-async function syncServerRules() {
+async function syncMemberVerificationRules() {
   try {
     const current = await client.rest.get(`/guilds/${guild.id}/member-verification`);
     const currentValues = current?.form_fields?.[0]?.values || [];
@@ -782,7 +763,7 @@ async function syncServerRules() {
             values: SERVER_RULES,
           }]
         },
-        reason: 'Simplify and align Fanvue AI community rules'
+        reason: 'Keep Fanvue AI membership screening rules current'
       });
       console.log('MEMBER_VERIFICATION_RULES_UPDATED ' + JSON.stringify(SERVER_RULES));
     } else {
@@ -791,30 +772,39 @@ async function syncServerRules() {
   } catch (err) {
     console.error('MEMBER_VERIFICATION_RULES_UPDATE_FAILED', err?.rawError || err?.message || err);
   }
+}
 
-  const infoChannel = guild.channels.cache.get('1427337799451021519');
-  if (!infoChannel?.isTextBased?.()) {
-    console.warn('INFO_CHANNEL_NOT_FOUND_FOR_RULES');
-    return;
-  }
+async function cleanupBotPinsAndInfoRulesOnce() {
+  let unpinned = 0;
+  let deletedInfoRules = 0;
 
-  try {
-    const recent = await infoChannel.messages.fetch({ limit: 50 }).catch(() => null);
-    let msg = recent
-      ? [...recent.values()].find((m) => m.author?.id === client.user.id && m.content?.startsWith('## Server Rules'))
-      : null;
+  for (const ch of guild.channels.cache.values()) {
+    if (!ch.isTextBased?.()) continue;
+    const perms = ch.permissionsFor(guild.members.me);
+    if (!perms?.has(PermissionsBitField.Flags.ViewChannel) || !perms?.has(PermissionsBitField.Flags.ReadMessageHistory)) continue;
 
-    if (msg) {
-      if (msg.content !== SERVER_RULES_POST) msg = await msg.edit(SERVER_RULES_POST);
-    } else {
-      msg = await infoChannel.send(SERVER_RULES_POST);
+    try {
+      const pins = await ch.messages.fetchPins();
+      for (const msg of pins.values()) {
+        if (msg.author?.id !== client.user.id) continue;
+        await msg.unpin('Remove pins previously created by Fanvue bot').catch(() => null);
+        unpinned++;
+      }
+    } catch {}
+
+    if (ch.id === '1427337799451021519') {
+      const recent = await ch.messages.fetch({ limit: 100 }).catch(() => null);
+      if (!recent) continue;
+      for (const msg of recent.values()) {
+        if (msg.author?.id !== client.user.id) continue;
+        if (!String(msg.content || '').startsWith('## Server Rules')) continue;
+        await msg.delete().catch(() => null);
+        deletedInfoRules++;
+      }
     }
-
-    if (!msg.pinned) await msg.pin('Pin current Fanvue AI community rules').catch(() => null);
-    console.log('INFO_RULES_POST_CURRENT ' + JSON.stringify({ channelId: infoChannel.id, messageId: msg.id, pinned: msg.pinned }));
-  } catch (err) {
-    console.error('INFO_RULES_POST_FAILED', err?.rawError || err?.message || err);
   }
+
+  console.log('BOT_PIN_INFO_CLEANUP ' + JSON.stringify({ unpinned, deletedInfoRules }));
 }
 
 
@@ -1031,7 +1021,8 @@ client.once('clientReady', async () => {
   await guild.roles.fetch();
   await syncToolsMessage();
   await ensureTrackedFreeCourseButton();
-  await syncServerRules();
+  await syncMemberVerificationRules();
+  await cleanupBotPinsAndInfoRulesOnce();
   await configureGeneralMediaPolicy();
   await configureCreationsPolicy();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
