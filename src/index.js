@@ -45,7 +45,7 @@ const statePath = path.join(cfg.dataDir, 'state.json');
 const redis = process.env.REDIS_URL ? new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: 3 }) : null;
 const STATE_KEY = 'fanvue:invite-state:v2';
 const INSTANCE_ID = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
-const blankState = () => ({ links: {}, weeks: {}, referrals: {}, names: {}, baselines: {}, messageId: null, lastWeek: null });
+const blankState = () => ({ links: {}, weeks: {}, referrals: {}, names: {}, baselines: {}, messageId: null, lastWeek: null, courseClicks: 0, lastCourseClickAt: null });
 let state = blankState();
 try { state = { ...blankState(), ...JSON.parse(fs.readFileSync(statePath, 'utf8')) }; } catch {}
 
@@ -55,6 +55,8 @@ function normaliseState() {
   state.referrals ||= {};
   state.names ||= {};
   state.baselines ||= {};
+  state.courseClicks = Math.max(0, Number(state.courseClicks || 0));
+  state.lastCourseClickAt ||= null;
 }
 normaliseState();
 
@@ -293,13 +295,83 @@ async function configureGeneralMediaPolicy() {
   console.log('GENERAL_MEDIA_POLICY ' + JSON.stringify({
     id: generalChannel.id,
     name: generalChannel.name,
-    everyoneAttachFiles: generalChannel.permissionOverwrites.cache.get(guild.roles.everyone.id)?.deny.has(PermissionsBitField.Flags.AttachFiles) === true,
+    everyoneAttachFilesDenied: generalChannel.permissionOverwrites.cache.get(guild.roles.everyone.id)?.deny.has(PermissionsBitField.Flags.AttachFiles) === true,
     staffAttachFilesAllowed: [...staffRoleIds].filter((id) => guild.roles.cache.has(id)).every((id) =>
       generalChannel.permissionsFor(guild.roles.cache.get(id))?.has(PermissionsBitField.Flags.AttachFiles)
     ),
     explicitContentFilter: guild.explicitContentFilter
   }));
 }
+
+async function auditCommunityChannels() {
+  const creations = [...guild.channels.cache.values()].find((ch) => ch.isTextBased?.() && norm(ch.name) === 'creations') || null;
+  const general = generalChannel || guild.channels.cache.get('1427337799451021521') || null;
+  const memberRoleIds = [
+    '1499030714341920783', // Fanvue Academy
+    '1430978118717538346', // New Creator
+    '1430998244233838763', // Silver
+    '1430998282510929930', // Gold
+    '1430998390690414592', // Diamond
+    '1539309205364805662', // Elite
+    '1431000324864348210', // Legendary
+  ].filter((id) => guild.roles.cache.has(id));
+
+  const effective = (channel, roleId) => {
+    const role = guild.roles.cache.get(roleId);
+    const p = role && channel?.permissionsFor(role);
+    if (!p) return null;
+    return {
+      roleId,
+      roleName: role.name,
+      view: p.has(PermissionsBitField.Flags.ViewChannel),
+      send: p.has(PermissionsBitField.Flags.SendMessages),
+      attach: p.has(PermissionsBitField.Flags.AttachFiles),
+      createPublicThreads: p.has(PermissionsBitField.Flags.CreatePublicThreads),
+      createPrivateThreads: p.has(PermissionsBitField.Flags.CreatePrivateThreads),
+      sendInThreads: p.has(PermissionsBitField.Flags.SendMessagesInThreads),
+    };
+  };
+
+  const relevantOverwrites = (channel) => channel ? [...channel.permissionOverwrites.cache.values()]
+    .map((o) => ({
+      id: o.id,
+      type: o.type,
+      allow: [
+        ['SendMessages', PermissionsBitField.Flags.SendMessages],
+        ['AttachFiles', PermissionsBitField.Flags.AttachFiles],
+        ['CreatePublicThreads', PermissionsBitField.Flags.CreatePublicThreads],
+        ['CreatePrivateThreads', PermissionsBitField.Flags.CreatePrivateThreads],
+        ['SendMessagesInThreads', PermissionsBitField.Flags.SendMessagesInThreads],
+      ].filter(([,flag]) => o.allow.has(flag)).map(([name]) => name),
+      deny: [
+        ['SendMessages', PermissionsBitField.Flags.SendMessages],
+        ['AttachFiles', PermissionsBitField.Flags.AttachFiles],
+        ['CreatePublicThreads', PermissionsBitField.Flags.CreatePublicThreads],
+        ['CreatePrivateThreads', PermissionsBitField.Flags.CreatePrivateThreads],
+        ['SendMessagesInThreads', PermissionsBitField.Flags.SendMessagesInThreads],
+      ].filter(([,flag]) => o.deny.has(flag)).map(([name]) => name),
+    }))
+    .filter((o) => o.allow.length || o.deny.length) : [];
+
+  console.log('COMMUNITY_CHANNEL_AUDIT ' + JSON.stringify({
+    general: general ? {
+      id: general.id,
+      parentId: general.parentId,
+      roles: memberRoleIds.map((id) => effective(general, id)).filter(Boolean),
+      overwrites: relevantOverwrites(general),
+    } : null,
+    creations: creations ? {
+      id: creations.id,
+      parentId: creations.parentId,
+      roles: memberRoleIds.map((id) => effective(creations, id)).filter(Boolean),
+      overwrites: relevantOverwrites(creations),
+    } : null,
+    redisBackedState: Boolean(redis),
+    courseClicks: Number(state.courseClicks || 0),
+    lastCourseClickAt: state.lastCourseClickAt || null,
+  }));
+}
+
 
 async function configureHangoutChannel() {
   if (!memberCountChannel) return;
@@ -846,6 +918,7 @@ client.once('clientReady', async () => {
   await ensureTrackedFreeCourseButton();
   await syncServerRules();
   await configureGeneralMediaPolicy();
+  await auditCommunityChannels();
   invitesChannel = await findChannel(cfg.invitesChannelId, cfg.invitesChannelName);
   landingChannel = await findChannel(cfg.landingChannelId, cfg.landingChannelName);
   memberCountChannel = await guild.channels.fetch('1572455999158231260').catch(() => null);
@@ -948,7 +1021,12 @@ http.createServer((req, res) => {
   const requestUrl = new URL(req.url || '/', 'http://localhost');
 
   if (requestUrl.pathname === '/course') {
-    recordCourseClick();
+    if (req.method === 'GET') recordCourseClick();
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.writeHead(405, { allow: 'GET, HEAD', 'cache-control': 'no-store' });
+      res.end();
+      return;
+    }
     res.writeHead(302, {
       location: COURSE_DESTINATION,
       'cache-control': 'no-store',
@@ -966,7 +1044,8 @@ http.createServer((req, res) => {
       discord: client.isReady(),
       role: creatorRole?.id || null,
       courseClicks: Number(state.courseClicks || 0),
-      lastCourseClickAt: state.lastCourseClickAt || null
+      lastCourseClickAt: state.lastCourseClickAt || null,
+      sharedState: redis ? 'redis' : 'local'
     }));
     return;
   }
