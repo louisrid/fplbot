@@ -693,6 +693,25 @@ async function inspectMemberVerificationOnce() {
     const data = await client.rest.get(`/guilds/${guild.id}/member-verification`);
     console.log('MEMBER_VERIFICATION_INSPECT ' + JSON.stringify(data));
 
+    for (const route of [
+      `/guilds/${guild.id}/onboarding`,
+      `/guilds/${guild.id}/new-member-actions`,
+      `/guilds/${guild.id}/welcome-screen`,
+      `/guilds/${guild.id}/home-settings`
+    ]) {
+      try {
+        const cfg = await client.rest.get(route);
+        console.log('GUILD_GUIDE_INSPECT ' + JSON.stringify({ route, cfg }));
+      } catch (err) {
+        console.log('GUILD_GUIDE_INSPECT_FAILED ' + JSON.stringify({
+          route,
+          code: err?.code || null,
+          status: err?.status || null,
+          message: err?.rawError?.message || err?.message || String(err)
+        }));
+      }
+    }
+
     for (const channelId of ['1427337799451021519', '1427337799451021516']) {
       const ch = guild.channels.cache.get(channelId);
       if (!ch?.isTextBased?.()) continue;
