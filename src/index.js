@@ -871,7 +871,7 @@ client.on('interactionCreate', async (i) => {
       return;
     }
     if (i.customId === 'ref:stats') {
-      await i.deferReply({ ephemeral: true });
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
       await syncInviteCounters();
       const n = weekCount(i.user.id);
       const revoked = revokedCount(i.user.id);
