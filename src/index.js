@@ -449,7 +449,7 @@ async function leaderboardPayload() {
       .setThumbnailAccessory(new ThumbnailBuilder().setURL(icon).setDescription('Fanvue AI Creator Academy'))
     );
   } else {
-    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`# 💚 INVITE & EARN · WEEK ${weekNo}\nInvite creators to the **Fanvue AI Creator Academy** and climb the live **Week ${weekNo}** leaderboard.`));
+    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`# 💚 INVITE & WIN · WEEK ${weekNo}\nInvite creators to the **Fanvue AI Creator Academy** and climb the live **Week ${weekNo}** leaderboard.`));
   }
   c.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
   c.addTextDisplayComponents(
