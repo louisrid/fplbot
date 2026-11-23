@@ -973,12 +973,26 @@ const SUPPORT_INFO_MARKER = 'SUPPORT';
 
 function supportInfoPayload() {
   const card = new ContainerBuilder().setAccentColor(0x75FB4C);
+  const icon = guild.iconURL({ size: 128 });
 
-  card.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent('# 🆘 SUPPORT'),
-    new TextDisplayBuilder().setContent('# ↑'),
-    new TextDisplayBuilder().setContent('Use the support button above to open a private ticket.')
-  );
+  if (icon) {
+    card.addSectionComponents(
+      new SectionBuilder()
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent('# 🆘 SUPPORT'),
+          new TextDisplayBuilder().setContent('## ⬆️ USE THE SUPPORT BUTTON ABOVE')
+        )
+        .setThumbnailAccessory(
+          new ThumbnailBuilder()
+            .setURL(icon)
+            .setDescription('Fanvue AI Creator Academy')
+        )
+    );
+  } else {
+    card.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('# 🆘 SUPPORT\n## ⬆️ USE THE SUPPORT BUTTON ABOVE')
+    );
+  }
 
   return {
     flags: MessageFlags.IsComponentsV2,
@@ -986,6 +1000,7 @@ function supportInfoPayload() {
     allowedMentions: { parse: [] }
   };
 }
+
 
 async function syncSupportInfoPanel() {
   const ch = guild.channels.cache.get(SUPPORT_CHANNEL_ID) || await guild.channels.fetch(SUPPORT_CHANNEL_ID).catch(() => null);
