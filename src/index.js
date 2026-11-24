@@ -45,7 +45,7 @@ const statePath = path.join(cfg.dataDir, 'state.json');
 const redis = process.env.REDIS_URL ? new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: 3 }) : null;
 const STATE_KEY = 'fanvue:invite-state:v2';
 const INSTANCE_ID = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
-const blankState = () => ({ links: {}, weeks: {}, referrals: {}, names: {}, baselines: {}, messageId: null, lastWeek: null, courseClicks: 0, lastCourseClickAt: null });
+const blankState = () => ({ links: {}, weeks: {}, referrals: {}, names: {}, baselines: {}, messageId: null, lastWeek: null, courseClicks: 0, lastCourseClickAt: null, courseClickTimes: [], courseClickBaselineClicks: 0, courseClickBaselineAt: null });
 let state = blankState();
 try { state = { ...blankState(), ...JSON.parse(fs.readFileSync(statePath, 'utf8')) }; } catch {}
 
@@ -57,6 +57,15 @@ function normaliseState() {
   state.baselines ||= {};
   state.courseClicks = Math.max(0, Number(state.courseClicks || 0));
   state.lastCourseClickAt ||= null;
+  state.courseClickTimes = Array.isArray(state.courseClickTimes)
+    ? state.courseClickTimes.filter((x) => Number.isFinite(Date.parse(x))).slice(-5000)
+    : [];
+  state.courseClickBaselineClicks = Math.max(0, Number(state.courseClickBaselineClicks || 0));
+  state.courseClickBaselineAt ||= null;
+  if (state.courseClicks > 0 && state.courseClickBaselineClicks === 0 && state.courseClickTimes.length === 0) {
+    state.courseClickBaselineClicks = state.courseClicks;
+    state.courseClickBaselineAt = state.lastCourseClickAt || new Date().toISOString();
+  }
 }
 normaliseState();
 
@@ -813,8 +822,13 @@ async function ensureTrackedFreeCourseButton() {
 }
 
 function recordCourseClick() {
+  const now = new Date().toISOString();
   state.courseClicks = Number(state.courseClicks || 0) + 1;
-  state.lastCourseClickAt = new Date().toISOString();
+  state.lastCourseClickAt = now;
+  state.courseClickTimes ||= [];
+  state.courseClickTimes.push(now);
+  const keepAfter = Date.now() - 8 * 24 * 60 * 60 * 1000;
+  state.courseClickTimes = state.courseClickTimes.filter((x) => Date.parse(x) >= keepAfter);
   save();
 
   // Netlify records this unique 200 request in Observability. Fire-and-forget
@@ -1223,12 +1237,21 @@ http.createServer((req, res) => {
   }
 
   if (requestUrl.pathname === '/healthz') {
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const baselineAt = Date.parse(state.courseClickBaselineAt || '');
+    const baselineClicks = Number.isFinite(baselineAt) && baselineAt >= cutoff
+      ? Number(state.courseClickBaselineClicks || 0)
+      : 0;
+    const recentClicks = (state.courseClickTimes || []).filter((x) => Date.parse(x) >= cutoff).length;
+
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
     res.end(JSON.stringify({
       ok: true,
       discord: client.isReady(),
       role: creatorRole?.id || null,
+      memberCount: Number(guild?.memberCount || 0),
       courseClicks: Number(state.courseClicks || 0),
+      courseClicksLast7Days: baselineClicks + recentClicks,
       lastCourseClickAt: state.lastCourseClickAt || null,
       sharedState: redis ? 'redis' : 'local'
     }));
